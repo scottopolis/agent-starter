@@ -3,7 +3,14 @@ import { useChat } from '@ai-sdk/react';
 import { FormEvent, KeyboardEvent, lazy, Suspense, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { getToolName, isToolUIPart, type ChatStatus, type ChatTransport, type UIMessage } from 'ai';
+import {
+  getToolName,
+  isToolUIPart,
+  lastAssistantMessageIsCompleteWithApprovalResponses,
+  type ChatStatus,
+  type ChatTransport,
+  type UIMessage,
+} from 'ai';
 
 const McpApp = lazy(() => import('./McpApp'));
 
@@ -54,7 +61,7 @@ function ConnectedChat({
   onReset,
   onRequestClose,
 }: ChatWidgetProps & Readonly<{ id: string; onReset: () => void }>) {
-  const chat = useChat({ id, transport });
+  const chat = useChat({ id, transport, sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses });
   const [draft, setDraft] = useState('');
   const viewportRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -112,7 +119,14 @@ function ConnectedChat({
               <div className="message-bubble message-bubble--assistant"><p>{welcome}</p></div>
             </div>
           )}
-          {chat.messages.map((message) => <Message key={message.id} message={message} embedAncestorOrigin={embedAncestorOrigin} />)}
+          {chat.messages.map((message) => (
+            <Message
+              key={message.id}
+              message={message}
+              embedAncestorOrigin={embedAncestorOrigin}
+              respondToApproval={(approval) => void chat.addToolApprovalResponse(approval)}
+            />
+          ))}
           {isBusy(chat.status) && !hasVisibleParts(chat.messages.at(-1)) && (
             <div className="typing" role="status" aria-label="Assistant is responding"><i /><i /><i /></div>
           )}
@@ -149,11 +163,16 @@ function ConnectedChat({
   );
 }
 
-function Message({ message, embedAncestorOrigin }: { message: UIMessage; embedAncestorOrigin?: string }) {
+function Message({ message, embedAncestorOrigin, respondToApproval }: {
+  message: UIMessage;
+  embedAncestorOrigin?: string;
+  respondToApproval: (approval: { id: string; approved: boolean; reason?: string }) => void;
+}) {
   if (message.role === 'user') {
     const text = message.parts.filter((part) => part.type === 'text').map((part) => part.text).join('');
     return <div className="message-row message-row--user"><div className="message-bubble message-bubble--user"><p>{text}</p></div></div>;
   }
+  if (!message.parts.some(isVisiblePart)) return null;
   return (
     <div className="message-row message-row--assistant">
       <div className="assistant-avatar">AI</div>
@@ -168,7 +187,9 @@ function Message({ message, embedAncestorOrigin }: { message: UIMessage; embedAn
               </div>
             );
           }
-          if (isToolUIPart(part)) return <ToolCard key={part.toolCallId} part={part} embedAncestorOrigin={embedAncestorOrigin} />;
+          if (isToolUIPart(part)) {
+            return <ToolCard key={part.toolCallId} part={part} embedAncestorOrigin={embedAncestorOrigin} respondToApproval={respondToApproval} />;
+          }
           return null;
         })}
       </div>
@@ -176,11 +197,32 @@ function Message({ message, embedAncestorOrigin }: { message: UIMessage; embedAn
   );
 }
 
-function ToolCard({ part, embedAncestorOrigin }: {
+function ToolCard({ part, embedAncestorOrigin, respondToApproval }: {
   part: Extract<UIMessage['parts'][number], { toolCallId: string }>;
   embedAncestorOrigin?: string;
+  respondToApproval: (approval: { id: string; approved: boolean; reason?: string }) => void;
 }) {
   const name = getToolName(part);
+  if (part.state === 'approval-requested' && !part.approval.isAutomatic) {
+    return (
+      <section className="approval-card" aria-label={`${humanize(name)} approval`}>
+        <p className="approval-card__eyebrow">Approval required</p>
+        <h2>{humanize(name)}</h2>
+        {part.approval.requestReason && <p>{part.approval.requestReason}</p>}
+        <pre>{JSON.stringify(part.input, null, 2)}</pre>
+        <div className="approval-card__actions">
+          <button type="button" className="approval-card__deny" onClick={() => respondToApproval({ id: part.approval.id, approved: false, reason: 'Denied by user' })}>Deny</button>
+          <button type="button" className="approval-card__approve" onClick={() => respondToApproval({ id: part.approval.id, approved: true })}>Approve</button>
+        </div>
+      </section>
+    );
+  }
+  if (part.state === 'approval-responded' && !part.approval.isAutomatic) {
+    return null;
+  }
+  if (part.state === 'output-denied') {
+    return <div className="approval-card approval-card--denied" role="status"><strong>Denied</strong><span>{humanize(name)} was not run.</span></div>;
+  }
   const fallback = <ToolFallback part={part} name={name} />;
   if (part.toolMetadata?.app) {
     return (
@@ -219,7 +261,13 @@ function isBusy(status: ChatStatus) {
 }
 
 function hasVisibleParts(message?: UIMessage) {
-  return message?.parts.some((part) => part.type === 'text' ? Boolean(part.text) : isToolUIPart(part)) ?? false;
+  return message?.parts.some(isVisiblePart) ?? false;
+}
+
+function isVisiblePart(part: UIMessage['parts'][number]) {
+  if (part.type === 'text') return Boolean(part.text);
+  if (!isToolUIPart(part)) return false;
+  return part.state !== 'approval-responded' || part.approval.isAutomatic === true;
 }
 
 function humanize(value: string) {

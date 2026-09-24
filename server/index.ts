@@ -14,8 +14,10 @@ import {
   type UIMessage,
 } from 'ai';
 import type { CallToolResult } from '@modelcontextprotocol/client';
+import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { z } from 'zod';
 
 import { McpRegistry, parseMcpConfig, type DiscoveredTool } from './mcp.js';
 
@@ -48,6 +50,7 @@ export function createChatServer({
     throw new Error('maxSteps must be an integer between 1 and 100');
   }
   const conversations = new Map<string, UIMessage[]>();
+  const approvalSecret = randomBytes(32);
 
   return createServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/api/health') {
@@ -83,7 +86,7 @@ export function createChatServer({
       conversations.set(chatRequest.id, messages);
       const discovered = mcp.enabled ? await mcp.discover() : [];
       const webResponse = model
-        ? await providerResponse({ model, instructions, maxSteps, messages, discovered, mcp, signal: disconnect.signal, persist: save })
+        ? await providerResponse({ model, instructions, maxSteps, messages, discovered, mcp, approvalSecret, signal: disconnect.signal, persist: save })
         : mockResponse({ messages, discovered, mcp, signal: disconnect.signal, persist: save });
       await sendWebResponse(response, webResponse);
 
@@ -112,6 +115,7 @@ async function providerResponse({
   messages,
   discovered,
   mcp,
+  approvalSecret,
   signal,
   persist,
 }: {
@@ -121,11 +125,24 @@ async function providerResponse({
   messages: UIMessage[];
   discovered: DiscoveredTool[];
   mcp: McpRegistry;
+  approvalSecret: Uint8Array;
   signal: AbortSignal;
   persist: (messages: UIMessage[]) => void;
 }) {
   const tools = createTools(discovered, mcp);
-  const agent = new ToolLoopAgent({ model, instructions, tools, stopWhen: isStepCount(maxSteps) });
+  const agent = new ToolLoopAgent({
+    model,
+    instructions: `${instructions} Use issue_demo_refund when the user asks to issue or process a demo refund. It is simulated. If a tool is denied, do not retry it.`,
+    tools,
+    toolApproval: {
+      issue_demo_refund: {
+        type: 'user-approval',
+        reason: 'Issuing a refund is a consequential action and requires your approval.',
+      },
+    },
+    experimental_toolApprovalSecret: approvalSecret,
+    stopWhen: isStepCount(maxSteps),
+  });
   return createAgentUIStreamResponse({
     agent,
     uiMessages: messages,
@@ -136,17 +153,32 @@ async function providerResponse({
 }
 
 function createTools(discovered: DiscoveredTool[], mcp: McpRegistry): ToolSet {
-  return Object.fromEntries(discovered.map((item) => [item.modelName, tool({
-    description: item.description,
-    inputSchema: jsonSchema(item.inputSchema),
-    metadata: {
-      clientName: item.serverId,
-      toolName: item.remoteName,
-      ...(item.app ? { app: { ...item.app, visibility: ['model', 'app'] } } : {}),
-    },
-    execute: (input, { abortSignal }) => mcp.callModelTool(item, input, abortSignal),
-    toModelOutput: ({ output }) => toModelToolOutput(output as CallToolResult),
-  })]));
+  return {
+    issue_demo_refund: tool({
+      description: 'Issue a simulated customer refund. Use this when the user asks to issue, send, or process a demo refund.',
+      inputSchema: z.object({
+        amount: z.number().positive().max(10_000),
+        recipient: z.string().min(1).max(100),
+      }),
+      execute: async ({ amount, recipient }) => ({
+        status: 'simulated',
+        amount,
+        recipient,
+        confirmation: `Demo refund of $${amount.toFixed(2)} approved for ${recipient}.`,
+      }),
+    }),
+    ...Object.fromEntries(discovered.map((item) => [item.modelName, tool({
+      description: item.description,
+      inputSchema: jsonSchema(item.inputSchema),
+      metadata: {
+        clientName: item.serverId,
+        toolName: item.remoteName,
+        ...(item.app ? { app: { ...item.app, visibility: ['model', 'app'] } } : {}),
+      },
+      execute: (input, { abortSignal }) => mcp.callModelTool(item, input, abortSignal),
+      toModelOutput: ({ output }) => toModelToolOutput(output as CallToolResult),
+    })])),
+  };
 }
 
 function mockResponse({
@@ -212,10 +244,41 @@ function authoritativeMessages(request: ChatRequest, stored: UIMessage[] = []): 
     return assistantIndex < 0 ? stored : stored.slice(0, assistantIndex);
   }
   const incoming = request.messages.at(-1);
+  if (incoming?.role === 'assistant') return applyApprovalResponses(stored, incoming);
   if (!incoming || incoming.role !== 'user' || stored.some((message) => message.id === incoming.id)) {
     throw new RequestError(400, 'Invalid user message');
   }
   return [...stored, incoming].slice(-100);
+}
+
+function applyApprovalResponses(stored: UIMessage[], incoming: UIMessage): UIMessage[] {
+  const last = stored.at(-1);
+  if (!last || last.role !== 'assistant') throw new RequestError(400, 'Invalid approval response');
+  const responses = incoming.parts.filter(isApprovalResponsePart);
+  const pending = last.parts.filter(isApprovalRequestPart);
+  if (responses.length < 1 || responses.length !== pending.length) throw new RequestError(400, 'Invalid approval response');
+  const byId = new Map(responses.map((part) => [part.approval.id, part.approval]));
+  if (byId.size !== responses.length || pending.some((part) => !byId.has(part.approval.id))) {
+    throw new RequestError(400, 'Invalid approval response');
+  }
+  const parts = last.parts.map((part) => {
+    if (!isApprovalRequestPart(part)) return part;
+    const response = byId.get(part.approval.id)!;
+    return {
+      ...part,
+      state: 'approval-responded' as const,
+      approval: { ...part.approval, approved: response.approved, reason: response.reason },
+    };
+  });
+  return [...stored.slice(0, -1), { ...last, parts }];
+}
+
+function isApprovalRequestPart(part: UIMessage['parts'][number]): part is Extract<typeof part, { state: 'approval-requested' }> {
+  return 'state' in part && part.state === 'approval-requested' && !part.approval.isAutomatic;
+}
+
+function isApprovalResponsePart(part: UIMessage['parts'][number]): part is Extract<typeof part, { state: 'approval-responded' }> {
+  return 'state' in part && part.state === 'approval-responded' && !part.approval.isAutomatic;
 }
 
 function parseChatRequest(value: unknown): ChatRequest {
@@ -255,8 +318,28 @@ function parseIncomingMessage(value: unknown): UIMessage {
     };
   }
   // Assistant messages are parsed only to locate the final user message. They are
-  // never used as authoritative model history; the server keeps its own copy.
-  return { id: value.id, role: 'assistant', parts: [] };
+  // never used as authoritative model history. Only explicit approval decisions
+  // are retained and merged into the server's stored approval request.
+  const parts = value.parts.flatMap((part) => {
+    if (!isRecord(part) || part.state !== 'approval-responded' || typeof part.type !== 'string'
+      || (!part.type.startsWith('tool-') && part.type !== 'dynamic-tool')
+      || typeof part.toolCallId !== 'string' || !isRecord(part.approval)
+      || typeof part.approval.id !== 'string' || typeof part.approval.approved !== 'boolean'
+      || (part.approval.reason !== undefined && typeof part.approval.reason !== 'string')) return [];
+    return [{
+      type: part.type,
+      ...(part.type === 'dynamic-tool' && typeof part.toolName === 'string' ? { toolName: part.toolName } : {}),
+      toolCallId: part.toolCallId,
+      state: 'approval-responded',
+      input: null,
+      approval: {
+        id: part.approval.id,
+        approved: part.approval.approved,
+        ...(part.approval.reason === undefined ? {} : { reason: part.approval.reason }),
+      },
+    }];
+  });
+  return { id: value.id, role: 'assistant', parts: parts as UIMessage['parts'] };
 }
 
 export function toModelToolOutput(result: CallToolResult) {

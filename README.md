@@ -20,6 +20,8 @@ Open `http://localhost:5173/` for standalone chat or `http://localhost:5173/exam
 
 Set `OPENAI_API_KEY` in `.env`; the executable backend uses `OPENAI_MODEL` (default `gpt-4o-mini`). Provider credentials stay in Node and are never returned to the browser. `MAX_STEPS` configures the agent tool-loop limit from 1–100 (default 5).
 
+In provider mode, ask **“Issue a demo refund of $25 to Alex.”** The model calls the built-in simulated refund tool, the chat pauses for explicit approval, and only an approved request executes. This demonstrates the AI SDK approval protocol without making an external change. The sample signs approval requests and keeps the authoritative tool input server-side; a production application must additionally authenticate the user and authorize the action on the server.
+
 `createChatServer` accepts any AI SDK `LanguageModel`, so applications can inject another provider without changing the server module. Environment and OpenAI wiring live only in the executable entry point:
 
 ```ts
@@ -80,7 +82,7 @@ The rendering code consumes standard UI-message text and tool parts rather than 
 
 `POST /api/chat` uses the [AI SDK UI message stream protocol](https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol) (`text/event-stream`). The browser sends `{ id, messages, trigger, messageId? }`; streamed text and tool calls/results use standard `UIMessageChunk` events.
 
-The sample server owns authoritative conversation history in memory, keyed by chat ID. It accepts only the latest validated user message from a submit request and does not trust browser-supplied assistant/tool outputs. Server-generated tool calls/results persist across turns. This is safe for a single sample process, not durable storage: conversations disappear on restart and production hosts must bind persistent history to authenticated users.
+The sample server owns authoritative conversation history in memory, keyed by chat ID. It accepts only the latest validated user message or an approval decision that matches a pending server-generated request; it does not trust browser-supplied tool inputs or outputs. Server-generated tool calls/results persist across turns. This is safe for a single sample process, not durable storage: conversations and the per-process approval signing key disappear on restart, and production hosts must bind persistent history to authenticated users.
 
 The browser can use only the opaque capability issued for a discovered app tool:
 

@@ -102,6 +102,12 @@ button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px sol
 .tool-card pre { overflow: auto; margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); font-size: 11px; }
 .tool-status { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: #d09436; }.tool-status--complete { background: #3ca37e; }.tool-status--error { background: #ce5d59; }
 
+.mcp-app-frame { width: 100%; margin-top: 8px; overflow: hidden; border: 1px solid #cfe0da; border-radius: 16px; background: #f5faf7; }
+.mcp-app-frame iframe { display: block; width: 100%; border: 0; transition: height .16s ease; }
+.mcp-app-loading, .mcp-app-fallback { margin-top: 8px; padding: 14px; border: 1px solid var(--line); border-radius: 13px; color: var(--muted); background: #fafbf9; font-size: 12px; }
+.mcp-app-fallback { border-color: #ecc7c4; color: #7c302d; background: #fff5f4; }
+.mcp-app-fallback pre { max-height: 180px; overflow: auto; margin: 10px 0 0; white-space: pre-wrap; font-size: 11px; }
+
 .error-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 8px 0; padding: 13px 14px; border: 1px solid #ecc7c4; border-radius: 13px; color: #7c302d; background: #fff5f4; font-size: 13px; }
 .error-card p { margin: 2px 0 0; color: #99524e; }.error-card button { flex: 0 0 auto; padding: 7px 10px; border: 1px solid #dba7a3; border-radius: 9px; color: inherit; background: #fff; font-weight: 600; }
 

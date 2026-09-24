@@ -1,11 +1,18 @@
 export type ChatRole = 'user' | 'assistant';
 
+export type McpAppMetadata = Readonly<{
+  capabilityId: string;
+  resourceUri: string;
+  mimeType: 'text/html;profile=mcp-app';
+}>;
+
 export type ToolDisplay = Readonly<{
   id: string;
   name: string;
   status: 'running' | 'complete' | 'error';
   input?: unknown;
   output?: unknown;
+  app?: McpAppMetadata;
 }>;
 
 export type ChatMessage = Readonly<{

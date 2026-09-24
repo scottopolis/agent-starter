@@ -1,16 +1,19 @@
 import { ArrowUp, MessageCircle, RotateCcw, Square, X } from 'lucide-react';
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, KeyboardEvent, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import type { ChatMessage, ChatTransport, ToolDisplay } from './types';
 import { useChat } from './use-chat';
 
+const McpApp = lazy(() => import('./McpApp'));
+
 export type ChatWidgetProps = Readonly<{
   transport: ChatTransport;
   title?: string;
   welcome?: string;
   embedded?: boolean;
+  embedAncestorOrigin?: string;
   requestedPrompt?: Readonly<{ id: string; text: string }>;
   onRequestClose?: () => void;
 }>;
@@ -20,6 +23,7 @@ export function ChatWidget({
   title = 'Your AI assistant',
   welcome = 'Hi! I’m here to help. Ask me anything about the product.',
   embedded = false,
+  embedAncestorOrigin,
   requestedPrompt,
   onRequestClose,
 }: ChatWidgetProps) {
@@ -72,7 +76,7 @@ export function ChatWidget({
               <div className="message-bubble message-bubble--assistant"><p>{welcome}</p></div>
             </div>
           )}
-          {chat.messages.map((message) => <Message key={message.id} message={message} />)}
+          {chat.messages.map((message) => <Message key={message.id} message={message} embedAncestorOrigin={embedAncestorOrigin} />)}
           {chat.status === 'streaming' && chat.messages.at(-1)?.content === '' && (
             <div className="typing" role="status" aria-label="Assistant is responding"><i /><i /><i /></div>
           )}
@@ -109,7 +113,7 @@ export function ChatWidget({
   );
 }
 
-function Message({ message }: { message: ChatMessage }) {
+function Message({ message, embedAncestorOrigin }: { message: ChatMessage; embedAncestorOrigin?: string }) {
   if (message.role === 'user') {
     return <div className="message-row message-row--user"><div className="message-bubble message-bubble--user"><p>{message.content}</p></div></div>;
   }
@@ -124,13 +128,20 @@ function Message({ message }: { message: ChatMessage }) {
             }}>{message.content}</ReactMarkdown>
           </div>
         )}
-        {message.tools?.map((tool) => <ToolCard key={tool.id} tool={tool} />)}
+        {message.tools?.map((tool) => <ToolCard key={tool.id} tool={tool} embedAncestorOrigin={embedAncestorOrigin} />)}
       </div>
     </div>
   );
 }
 
-function ToolCard({ tool }: { tool: ToolDisplay }) {
+function ToolCard({ tool, embedAncestorOrigin }: { tool: ToolDisplay; embedAncestorOrigin?: string }) {
+  if (tool.app) {
+    return (
+      <Suspense fallback={<div className="mcp-app-loading" role="status">Loading interactive app…</div>}>
+        <McpApp tool={tool} embedAncestorOrigin={embedAncestorOrigin} />
+      </Suspense>
+    );
+  }
   return (
     <details className="tool-card">
       <summary><span className={`tool-status tool-status--${tool.status}`} /> {humanize(tool.name)} <small>{tool.status}</small></summary>

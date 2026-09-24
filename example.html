@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Northstar — Widget embed example</title>
+    <link rel="stylesheet" href="/src/sample-site.css" />
+  </head>
+  <body>
+    <nav><strong>Northstar</strong><span>Product</span><span>Pricing</span><span>Company</span></nav>
+    <main class="sample-hero">
+      <p class="eyebrow">Built for focused teams</p>
+      <h1>Turn ambitious plans<br />into steady progress.</h1>
+      <p class="lede">A fictional website demonstrating the floating support widget. The host page and chat remain separate applications.</p>
+      <div class="sample-actions">
+        <button id="ask-widget">Ask about the product</button>
+        <a href="/">View standalone chat</a>
+      </div>
+      <section class="sample-grid">
+        <article><span>01</span><h2>Plan clearly</h2><p>Shape work around outcomes, not busywork.</p></article>
+        <article><span>02</span><h2>Move together</h2><p>Keep decisions and context within reach.</p></article>
+        <article><span>03</span><h2>Learn quickly</h2><p>Turn feedback into the next useful step.</p></article>
+      </section>
+    </main>
+    <script type="module" src="/src/embed/loader.ts" data-widget-url="/embed.html" data-title="Northstar guide"></script>
+    <script type="module">
+      document.querySelector('#ask-widget').addEventListener('click', () => {
+        window.AgentWidget.open({ message: 'What makes Northstar useful for a small team?' });
+      });
+    </script>
+  </body>
+</html>

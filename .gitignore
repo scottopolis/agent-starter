@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.env.local
+.amp/portals/
+.amp/in/artifacts/
+*.tsbuildinfo
+coverage/

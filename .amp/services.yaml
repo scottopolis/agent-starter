@@ -1,0 +1,7 @@
+services:
+  widget-starter:
+    command: npm run dev
+    port: 5173
+    readiness:
+      path: /
+    portal: true

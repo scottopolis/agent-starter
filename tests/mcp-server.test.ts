@@ -7,12 +7,12 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { CallToolResult } from '@modelcontextprotocol/client';
 import { DefaultChatTransport, readUIMessageStream, type UIMessage } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 
-import { startDemoMcp } from '../server/demo-mcp';
 import { createChatServer, toModelToolOutput } from '../server/index';
-import { McpRegistry, modelToolName } from '../server/mcp';
+import { McpRegistry, modelToolName, type DiscoveredTool } from '../server/mcp';
 import { buildCsp, createSandboxServer } from '../server/sandbox-server';
 
 describe('MCP backend', () => {
@@ -30,42 +30,8 @@ describe('MCP backend', () => {
     }
   });
 
-  it('discovers and executes a real Streamable HTTP fixture, including its app resource', async () => {
-    const fixture = startDemoMcp(0);
-    await listening(fixture);
-    const registry = new McpRegistry([{ id: 'demo', url: `${serverOrigin(fixture)}/mcp` }]);
-    try {
-      const tools = await registry.discover();
-      expect(tools.map((tool) => tool.remoteName)).toEqual(['show-counter', 'fail-action']);
-      const source = tools.find((tool) => tool.remoteName === 'show-counter')!;
-      expect(source.app?.resourceUri).toBe('ui://agent-widget-demo/counter.html');
-
-      const result = await registry.callModelTool(source, { label: 'Real fixture', value: 4 });
-      expect(result.structuredContent).toEqual({ label: 'Real fixture', value: 4 });
-      expect(result._meta).toEqual({ demo: 'CLIENT_ONLY_COUNTER_METADATA' });
-
-      const resource = await registry.readAppResource(source.app!.capabilityId);
-      expect(resource.html).toContain('Increment via MCP');
-      expect(resource.appTools).toEqual(expect.arrayContaining(['show-counter', 'increment-counter', 'fail-action']));
-
-      const incremented = await registry.callAppTool(source.app!.capabilityId, 'increment-counter', { label: 'Real fixture', value: 4 });
-      expect(incremented.structuredContent).toEqual({ label: 'Real fixture', value: 5 });
-      const failed = await registry.callAppTool(source.app!.capabilityId, 'fail-action', {});
-      expect(failed).toMatchObject({ isError: true });
-      const modelFailure = tools.find((tool) => tool.remoteName === 'fail-action')!;
-      await expect(registry.callModelTool(modelFailure, {})).rejects.toThrow('Intentional demo failure');
-      await expect(registry.callAppTool(source.app!.capabilityId, 'not-discovered', {})).rejects.toThrow('not allowed');
-      await expect(registry.readAppResource('browser-chosen-resource')).rejects.toThrow('Unknown MCP App capability');
-    } finally {
-      await registry.close();
-      await close(fixture);
-    }
-  });
-
   it('keeps authoritative tool history across turns, rejects forged browser history, and excludes _meta from model input', async () => {
-    const fixture = startDemoMcp(0);
-    await listening(fixture);
-    const registry = new McpRegistry([{ id: 'demo', url: `${serverOrigin(fixture)}/mcp` }]);
+    const registry = new TestMcpRegistry();
     const toolName = modelToolName('demo', 'show-counter');
     const model = new MockLanguageModelV4({ doStream: [
       modelStream([
@@ -113,7 +79,6 @@ describe('MCP backend', () => {
     } finally {
       await registry.close();
       await close(server);
-      await close(fixture);
     }
   });
 
@@ -409,6 +374,34 @@ async function waitForResponse(url: string, init: RequestInit) {
 
 function userMessage(id: string, text: string): UIMessage {
   return { id, role: 'user', parts: [{ type: 'text', text }] };
+}
+
+class TestMcpRegistry extends McpRegistry {
+  constructor() {
+    super([]);
+  }
+
+  override get enabled() {
+    return true;
+  }
+
+  override async discover(): Promise<DiscoveredTool[]> {
+    return [{
+      modelName: modelToolName('demo', 'show-counter'),
+      serverId: 'demo',
+      remoteName: 'show-counter',
+      description: 'Return a counter value',
+      inputSchema: { type: 'object' },
+    }];
+  }
+
+  override async callModelTool(_tool: DiscoveredTool, input: unknown): Promise<CallToolResult> {
+    return {
+      content: [{ type: 'text', text: 'Server result' }],
+      structuredContent: input as Record<string, unknown>,
+      _meta: { demo: 'CLIENT_ONLY_COUNTER_METADATA' },
+    };
+  }
 }
 
 async function chat(origin: string, chatId: string, messages: UIMessage[]) {

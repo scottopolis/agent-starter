@@ -1,6 +1,6 @@
 # Agent Widget Starter
 
-A source-first, customizable AI chat widget with an optional MCP Apps host. It includes a React standalone chat, an iframe embed and launcher, a Node/AI SDK backend, server-side MCP tool discovery and execution, and isolated inline MCP App rendering. Everything is editable TypeScript, React, and CSS—there is no hosted account, proprietary runtime, or compiled output in the repository.
+A source-first, customizable AI chat widget. It includes a React standalone chat, an iframe embed and launcher, a Node/AI SDK backend, Human-in-the-Loop tool approvals, optional connections to external MCP servers, and isolated inline MCP App rendering. Everything is editable TypeScript, React, and CSS—there is no hosted account, proprietary runtime, bundled MCP server, or compiled output in the repository.
 
 MCP is optional. With no provider or MCP configuration, ordinary chat runs in deterministic mock mode.
 
@@ -20,27 +20,59 @@ Open `http://localhost:5173/` for standalone chat or `http://localhost:5173/exam
 
 Set `OPENAI_API_KEY` in `.env`; the executable backend uses `OPENAI_MODEL` (default `gpt-4o-mini`). Provider credentials stay in Node and are never returned to the browser. `MAX_STEPS` configures the agent tool-loop limit from 1–100 (default 5).
 
-In provider mode, ask **“Issue a demo refund of $25 to Alex.”** The model calls the built-in simulated refund tool, the chat pauses for explicit approval, and only an approved request executes. This demonstrates the AI SDK approval protocol without making an external change. The sample signs approval requests and keeps the authoritative tool input server-side; a production application must additionally authenticate the user and authorize the action on the server.
-
 `createChatServer` accepts any AI SDK `LanguageModel`, so applications can inject another provider without changing the server module. Environment and OpenAI wiring live only in the executable entry point:
 
 ```ts
 const server = createChatServer({ model: myLanguageModel, maxSteps: 8, mcp: registry });
 ```
 
-## Quickstart: real local MCP App
+## Human-in-the-Loop tool approvals
 
-The repository includes a real Streamable HTTP MCP server with a counter tool, `ui://` HTML resource, and app-only increment tool. It needs no external account or LLM key:
+In provider mode, ask **“Issue a demo refund of $25 to Alex.”** The built-in simulated refund tool demonstrates the complete approval flow without making an external change:
 
-```bash
-npm run dev:demo
+1. The model requests `issue_demo_refund` with its proposed input.
+2. The AI SDK emits an `approval-requested` tool part and pauses before `execute` runs.
+3. `ChatWidget` renders Approve and Deny controls. It submits the decision with `addToolApprovalResponse`.
+4. The backend accepts only a decision matching its pending, signed approval request and keeps the authoritative tool input from server history.
+5. Approval executes the simulated tool; denial returns control to the model without executing it.
+
+To require approval for your own consequential tool, define the tool server-side and add its name to `toolApproval`:
+
+```ts
+const agent = new ToolLoopAgent({
+  model,
+  tools: {
+    issue_refund: tool({
+      description: 'Issue a customer refund',
+      inputSchema: z.object({ amount: z.number().positive(), recipient: z.string() }),
+      execute: issueRefund,
+    }),
+  },
+  toolApproval: {
+    issue_refund: {
+      type: 'user-approval',
+      reason: 'Issuing a refund requires your approval.',
+    },
+  },
+  experimental_toolApprovalSecret: approvalSecret,
+});
 ```
 
-Open the standalone or embedded chat and ask **“Show the MCP counter demo.”** Mock chat deterministically calls the discovered fixture tool. The resulting app is fetched through the backend, rendered in the distinct-origin sandbox, receives its tool input/result, and can call the app-only increment tool through the host. The browser never connects to the MCP endpoint.
+On the client, configure `useChat` to continue after every pending decision has a response, then submit the approval ID rendered in the tool part:
 
-`npm run demo:mcp` runs only the fixture at `http://127.0.0.1:8790/mcp` when separate processes are more convenient.
+```ts
+const chat = useChat({
+  transport,
+  sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
+});
 
-## Connect your own MCP server
+chat.addToolApprovalResponse({ id: part.approval.id, approved: true });
+// or: { id: part.approval.id, approved: false, reason: 'Denied by user' }
+```
+
+The existing implementation is in `server/index.ts`; the approval card and client calls are in `src/chat/ChatWidget.tsx`. Keep tool execution and authorization on the server. In production, authenticate the user, authorize the specific action and authoritative input, persist pending approvals and operation IDs, and make consequential operations idempotent. The sample's signing key and conversation state are in memory, so pending approvals do not survive a restart.
+
+## Connect an external MCP server
 
 Set `MCP_SERVERS` to a JSON array. Each `id` namespaces model-facing tool names; `url` is a Streamable HTTP endpoint; optional headers remain server-side.
 
@@ -50,7 +82,7 @@ MCP_SERVERS=[{"id":"support","url":"https://mcp.example.com/mcp","headers":{"Aut
 
 At request time, the backend connects with the official MCP client, advertises `io.modelcontextprotocol/ui`, discovers tools, hides app-only tools from the model, converts model-visible schemas into AI SDK tools, executes real tool calls, and streams standard AI SDK UI-message parts over SSE. A tool becomes an inline app when `_meta.ui.resourceUri` is a `ui://` URI and `resources/read` returns `text/html;profile=mcp-app`.
 
-This starter supports Streamable HTTP. Add another server-side MCP transport in `server/mcp.ts` if you need stdio; do not connect the browser directly to credentialed MCP services.
+This repository is an MCP client/App host; it does not include an MCP server. It supports external Streamable HTTP servers. Add another client transport in `server/mcp.ts` if you need stdio, and do not connect the browser directly to credentialed MCP services.
 
 ## Customize the source
 
@@ -64,7 +96,6 @@ This starter supports Streamable HTTP. Add another server-side MCP transport in 
 | LLM/mock orchestration and browser API | `server/index.ts` |
 | MCP connection, discovery, grants, calls | `server/mcp.ts` |
 | Separate-origin sandbox and CSP | `server/sandbox-server.ts` |
-| Local MCP server/app fixture | `server/demo-mcp.ts` |
 | Embed launcher and parent protocol | `src/embed/loader.ts`, `src/embed-main.tsx` |
 
 The default app uses `@ai-sdk/react` `useChat`, AI SDK `UIMessage`, and `DefaultChatTransport`. To connect another standard UI-message endpoint, pass a transport to `ChatWidget`; authentication headers belong in that transport:
@@ -162,8 +193,8 @@ npm run build
 npm audit
 ```
 
-Tests cover ordinary chat with MCP disabled, standard SSE transport, server-owned tool history, browser-history forgery rejection, `_meta` separation, real fixture discovery/resource/tool calls, delayed app initialization, app/model error semantics, denied capabilities/tools, exact source/origin checks, restrictive CSP parsing, embed behavior, and streaming races.
+Tests cover ordinary chat with MCP disabled, standard SSE transport, server-owned tool and approval history, forged approval/history rejection, `_meta` separation, delayed app initialization, denied capabilities/tools, exact source/origin checks, restrictive CSP parsing, embed behavior, and streaming races.
 
-## License and provenance
+## License
 
-Original project code is MIT licensed; see [LICENSE](LICENSE). Dependency licenses and behavioral-reference provenance are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+This project is MIT licensed; see [LICENSE](LICENSE).

@@ -1,8 +1,23 @@
 {
-  "name": "agent-widget-starter",
+  "name": "@scottopolis/agent-widget",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
+  "main": "./dist-lib/index.js",
+  "types": "./dist-lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist-lib/index.d.ts",
+      "import": "./dist-lib/index.js"
+    },
+    "./styles.css": "./dist-lib/agent-widget.css"
+  },
+  "files": [
+    "dist-lib"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
   "engines": {
     "node": ">=22"
   },
@@ -13,40 +28,48 @@
     "dev:sandbox": "tsx watch server/sandbox-server.ts",
     "start:server": "node dist/server/index.js",
     "start:sandbox": "node dist/server/sandbox-server.js",
-    "build": "npm run typecheck && vite build && vite build --config vite.embed.config.ts && tsc -p server/tsconfig.json",
+    "build": "npm run typecheck && npm run build:lib && vite build && vite build --config vite.embed.config.ts && tsc -p server/tsconfig.json",
+    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
+    "prepare": "npm run build:lib",
     "typecheck": "tsc --noEmit && tsc -p server/tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.0"
+  },
+  "peerDependencies": {
+    "@ai-sdk/react": ">=4.0.0 <5",
+    "ai": ">=7.0.0 <8",
+    "react": ">=18 <20",
+    "react-dom": ">=18 <20"
+  },
+  "devDependencies": {
     "@ai-sdk/mcp": "2.0.58",
     "@ai-sdk/openai": "4.0.75",
     "@ai-sdk/react": "4.0.117",
-    "@fontsource-variable/dm-sans": "^5.1.1",
-    "@fontsource-variable/manrope": "^5.1.1",
-    "@modelcontextprotocol/client": "^2.1.0",
-    "ai": "7.0.114",
-    "dotenv": "^17.2.2",
-    "lucide-react": "^0.468.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-markdown": "^9.0.1",
-    "remark-gfm": "^4.0.0",
-    "zod": "^4.6.5"
-  },
-  "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.2",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.3",
     "@types/react-dom": "^19.0.2",
+    "@fontsource-variable/dm-sans": "^5.1.1",
+    "@fontsource-variable/manrope": "^5.1.1",
+    "@modelcontextprotocol/client": "^2.1.0",
     "@vitejs/plugin-react": "^6.1.1",
+    "ai": "7.0.114",
     "concurrently": "^9.1.0",
+    "dotenv": "^17.2.2",
     "jsdom": "^25.0.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^8.3.1",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.1",
+    "zod": "^4.6.5"
   }
 }

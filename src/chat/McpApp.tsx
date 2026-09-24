@@ -4,7 +4,7 @@ import {
   type MCPAppResource,
 } from '@ai-sdk/react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { UIMessage } from 'ai';
+import type { ToolPart } from '../lib';
 
 const MIN_HEIGHT = 180;
 const MAX_HEIGHT = 720;
@@ -13,7 +13,6 @@ const INIT_TIMEOUT_MS = 8_000;
 const HOST_INFO = { name: 'Agent Widget Starter', version: '0.1.0' };
 const HOST_CONTEXT = { platform: 'web', displayMode: 'inline' as const, availableDisplayModes: ['inline' as const] };
 
-type ToolPart = Extract<UIMessage['parts'][number], { toolCallId: string }>;
 type ResourceEnvelope = MCPAppResource & Readonly<{ appTools: readonly string[] }>;
 
 export default function McpApp({

@@ -4,9 +4,11 @@ import { DefaultChatTransport } from 'ai';
 import '@fontsource-variable/dm-sans';
 import '@fontsource-variable/manrope';
 
-import { ChatWidget } from './chat/ChatWidget';
+import McpApp from './chat/McpApp';
 import { controlMessage, exactOrigin, parseControlMessage, parsePromptMessage } from './embed/protocol';
-import './styles.css';
+import { ChatWidget } from './lib';
+import './lib/styles.css';
+import './app.css';
 
 function EmbeddedApp() {
   const config = useMemo(() => readConfig(), []);
@@ -41,11 +43,13 @@ function EmbeddedApp() {
   return (
     <ChatWidget
       embedded
-      embedAncestorOrigin={config.parentOrigin}
       title={config.title}
       transport={transport}
       requestedPrompt={prompt}
       onRequestClose={() => window.parent.postMessage(controlMessage('REQUEST_CLOSE'), config.parentOrigin)}
+      renderTool={(part, { renderDefault }) => part.toolMetadata?.app
+        ? <McpApp part={part} embedAncestorOrigin={config.parentOrigin} fallback={renderDefault()} />
+        : renderDefault()}
     />
   );
 }

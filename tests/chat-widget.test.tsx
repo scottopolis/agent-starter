@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
 
-import { ChatWidget } from '../src/chat/ChatWidget';
+import { ChatSurface, ChatWidget } from '../src/lib';
 
 describe('ChatWidget', () => {
   it('submits a prompt supplied by an embed parent', async () => {
@@ -10,6 +10,26 @@ describe('ChatWidget', () => {
     render(<ChatWidget transport={transport} requestedPrompt={{ id: 'prompt-1', text: 'Help from the host' }} />);
     expect(await screen.findByText('Help from the host')).toBeInTheDocument();
     expect(await screen.findByText('Parent prompt received')).toBeInTheDocument();
+  });
+
+  it('does not replay a consumed host prompt after reset but sends a new prompt id', async () => {
+    let calls = 0;
+    const transport = sequence(() => {
+      calls += 1;
+      return textChunks(`Response ${calls}`);
+    });
+    const { rerender } = render(
+      <ChatWidget transport={transport} requestedPrompt={{ id: 'prompt-1', text: 'First host prompt' }} />,
+    );
+    expect(await screen.findByText('Response 1')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new chat' }));
+    await waitFor(() => expect(screen.queryByText('First host prompt')).not.toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toBe(1);
+
+    rerender(<ChatWidget transport={transport} requestedPrompt={{ id: 'prompt-2', text: 'Second host prompt' }} />);
+    expect(await screen.findByText('Response 2')).toBeInTheDocument();
+    expect(calls).toBe(2);
   });
 
   it('streams Markdown and keeps raw HTML inert', async () => {
@@ -80,6 +100,101 @@ describe('ChatWidget', () => {
     render(<ChatWidget transport={transport} />);
     await userEvent.type(screen.getByLabelText('Message'), 'Find it{enter}');
     expect(await screen.findByText('Account Lookup')).toBeInTheDocument();
+  });
+
+  it('treats a null custom tool render as suppression without leaking the fallback', () => {
+    render(
+      <ChatSurface
+        messages={[toolMessage()]}
+        status="ready"
+        actions={surfaceActions()}
+        renderTool={() => null}
+      />,
+    );
+    expect(screen.queryByText('Account Lookup')).not.toBeInTheDocument();
+    expect(screen.queryByText(/found/)).not.toBeInTheDocument();
+    expect(document.querySelector('.message-row--assistant')).toBeNull();
+  });
+
+  it('renders host status and controls around the composer and keeps user text literal', () => {
+    render(
+      <ChatSurface
+        messages={[{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '<b>literal</b>' }] }]}
+        status="ready"
+        actions={surfaceActions()}
+        statusContent={<div>Restoring conversation…</div>}
+        beforeComposer={<button type="button">Run browser action</button>}
+      />,
+    );
+    expect(screen.getByText('<b>literal</b>')).toBeInTheDocument();
+    expect(document.querySelector('.message-bubble--user b')).toBeNull();
+    expect(screen.getByText('Restoring conversation…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run browser action' })).toBeInTheDocument();
+  });
+
+  it('does not submit Enter while an IME composition is active', () => {
+    const sendMessage = vi.fn();
+    render(<ChatSurface messages={[]} status="ready" actions={surfaceActions({ sendMessage })} />);
+    const composer = screen.getByLabelText('Message');
+    fireEvent.change(composer, { target: { value: '変換中' } });
+    fireEvent.keyDown(composer, { key: 'Enter', isComposing: true });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(composer).toHaveValue('変換中');
+  });
+
+  it('uses an independent labelled composer id for each mounted surface', () => {
+    render(
+      <>
+        <ChatSurface messages={[]} status="ready" actions={surfaceActions()} />
+        <ChatSurface messages={[]} status="ready" actions={surfaceActions()} />
+      </>,
+    );
+    const composers = screen.getAllByLabelText('Message');
+    const labels = screen.getAllByText('Message');
+    expect(composers).toHaveLength(2);
+    expect(composers[0].id).not.toBe(composers[1].id);
+    expect(labels[0]).toHaveAttribute('for', composers[0].id);
+    expect(labels[1]).toHaveAttribute('for', composers[1].id);
+  });
+
+  it('shows progress after a submitted user message unless host status content replaces it', () => {
+    const message: UIMessage = { id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'Waiting' }] };
+    const { rerender } = render(<ChatSurface messages={[message]} status="submitted" actions={surfaceActions()} />);
+    expect(screen.getByRole('status', { name: 'Assistant is responding' })).toBeInTheDocument();
+    rerender(<ChatSurface messages={[message]} status="submitted" actions={surfaceActions()} statusContent={null} />);
+    expect(screen.queryByRole('status', { name: 'Assistant is responding' })).not.toBeInTheDocument();
+    rerender(<ChatSurface messages={[message]} status="submitted" actions={surfaceActions()} statusContent={<div role="status">Recovering</div>} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Recovering');
+  });
+
+  it('restores a rejected draft, releases the submit lock, and permits a successful retry', async () => {
+    const sendMessage = vi.fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(undefined);
+    render(<ChatSurface messages={[]} status="ready" actions={surfaceActions({ sendMessage })} />);
+    const composer = screen.getByLabelText('Message');
+    await userEvent.type(composer, 'Retry this{enter}');
+    await waitFor(() => expect(composer).toHaveValue('Retry this'));
+    await userEvent.type(composer, '{enter}');
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+    expect(sendMessage).toHaveBeenNthCalledWith(2, { text: 'Retry this' });
+    expect(composer).toHaveValue('');
+  });
+
+  it('does not force follow-scroll after the reader scrolls away from the end', () => {
+    const scrollTo = vi.spyOn(HTMLElement.prototype, 'scrollTo');
+    const { rerender } = render(<ChatSurface messages={[]} status="ready" actions={surfaceActions()} />);
+    const viewport = screen.getByLabelText('Conversation messages');
+    Object.defineProperties(viewport, {
+      scrollHeight: { configurable: true, value: 500 },
+      clientHeight: { configurable: true, value: 100 },
+      scrollTop: { configurable: true, value: 0 },
+    });
+    fireEvent.scroll(viewport);
+    const callsBeforeUpdate = scrollTo.mock.calls.length;
+    rerender(<ChatSurface messages={[{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'Older' }] }]} status="ready" actions={surfaceActions()} />);
+    expect(scrollTo).toHaveBeenCalledTimes(callsBeforeUpdate);
+    scrollTo.mockRestore();
   });
 
   it('shows a tool approval request and sends the decision before continuing', async () => {
@@ -226,6 +341,31 @@ function messageText(message: UIMessage) {
 
 function isApprovalPart(part: UIMessage['parts'][number]) {
   return 'state' in part && part.state === 'approval-responded';
+}
+
+function toolMessage(): UIMessage {
+  return {
+    id: 'assistant-tool',
+    role: 'assistant',
+    parts: [{
+      type: 'dynamic-tool',
+      toolCallId: 'tool-1',
+      toolName: 'account_lookup',
+      state: 'output-available',
+      input: { accountId: 'secret' },
+      output: { found: true },
+    }],
+  };
+}
+
+function surfaceActions(overrides: Partial<Parameters<typeof ChatSurface>[0]['actions']> = {}) {
+  return {
+    sendMessage: vi.fn(),
+    stop: vi.fn(),
+    regenerate: vi.fn(),
+    addToolApprovalResponse: vi.fn(),
+    ...overrides,
+  };
 }
 
 function deferred<T>() {

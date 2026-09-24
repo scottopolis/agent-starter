@@ -1,0 +1,44 @@
+{
+  "name": "agent-widget-starter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n web,api -c cyan,magenta \"vite --host 0.0.0.0\" \"tsx watch server/index.ts\"",
+    "dev:web": "vite --host 0.0.0.0",
+    "dev:server": "tsx watch server/index.ts",
+    "build": "npm run typecheck && vite build && vite build --config vite.embed.config.ts && tsc -p server/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc -p server/tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.74",
+    "@fontsource-variable/dm-sans": "^5.1.1",
+    "@fontsource-variable/manrope": "^5.1.1",
+    "ai": "^7.0.113",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.3",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^9.1.0",
+    "jsdom": "^25.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.1"
+  }
+}

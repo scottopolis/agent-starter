@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "concurrently -k -n web,api,sandbox -c cyan,magenta,yellow \"npm run dev:web\" \"npm run dev:server\" \"npm run dev:sandbox\"",
@@ -21,12 +21,14 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^4.0.74",
+    "@ai-sdk/mcp": "2.0.58",
+    "@ai-sdk/openai": "4.0.75",
+    "@ai-sdk/react": "4.0.117",
     "@fontsource-variable/dm-sans": "^5.1.1",
     "@fontsource-variable/manrope": "^5.1.1",
     "@modelcontextprotocol/client": "^2.1.0",
     "@modelcontextprotocol/ext-apps": "^2.0.0",
-    "ai": "^7.0.113",
+    "ai": "7.0.114",
     "dotenv": "^17.2.2",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",

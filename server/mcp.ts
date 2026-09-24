@@ -1,7 +1,12 @@
+import {
+  MCP_APP_MIME_TYPE,
+  mcpAppClientCapabilities,
+  readMCPAppResource,
+  splitMCPAppTools,
+  type MCPAppResource,
+} from '@ai-sdk/mcp';
 import { Client, StreamableHTTPClientTransport, type CallToolResult, type Tool } from '@modelcontextprotocol/client';
 import { createHash, randomUUID } from 'node:crypto';
-
-export const MCP_APP_MIME_TYPE = 'text/html;profile=mcp-app';
 
 export type McpServerConfig = Readonly<{
   id: string;
@@ -13,6 +18,7 @@ export type McpAppMetadata = Readonly<{
   capabilityId: string;
   resourceUri: string;
   mimeType: typeof MCP_APP_MIME_TYPE;
+  appTools: readonly string[];
 }>;
 
 export type DiscoveredTool = Readonly<{
@@ -24,10 +30,7 @@ export type DiscoveredTool = Readonly<{
   app?: McpAppMetadata;
 }>;
 
-export type AppResource = Readonly<{
-  html: string;
-  csp?: McpUiCsp;
-  permissions?: McpUiPermissions;
+export type AppResource = MCPAppResource & Readonly<{
   appTools: readonly string[];
 }>;
 
@@ -74,11 +77,12 @@ export class McpRegistry {
   async discover(): Promise<DiscoveredTool[]> {
     const servers = await Promise.all(this.#configs.map((config) => this.#connect(config)));
     return servers.flatMap((server) => {
+      const { modelVisible, appVisible } = visibleToolNames(server.tools);
       return server.tools.flatMap((tool) => {
-        if (!visibility(tool).includes('model')) return [];
+        if (!modelVisible.has(tool.name)) return [];
         const resourceUri = resourceUriFor(tool);
         const appTools = new Set(server.tools
-          .filter((candidate) => visibility(candidate).includes('app') && resourceUriFor(candidate) === resourceUri)
+          .filter((candidate) => appVisible.has(candidate.name) && resourceUriFor(candidate) === resourceUri)
           .map((candidate) => candidate.name));
         const app = resourceUri ? this.#grant(server, tool.name, resourceUri, appTools) : undefined;
         return [{
@@ -96,7 +100,7 @@ export class McpRegistry {
   async callModelTool(tool: DiscoveredTool, input: unknown, signal?: AbortSignal): Promise<CallToolResult> {
     const server = await this.#server(tool.serverId);
     const current = server.tools.find((candidate) => candidate.name === tool.remoteName);
-    if (!current || !visibility(current).includes('model')) throw new Error('MCP tool is no longer available');
+    if (!current || !visibleToolNames(server.tools).modelVisible.has(current.name)) throw new Error('MCP tool is no longer available');
     const result = await server.client.callTool({ name: current.name, arguments: objectArguments(input) }, { signal });
     if (result.isError) throw new Error(textResult(result) || `MCP tool ${current.name} failed`);
     return result;
@@ -105,14 +109,12 @@ export class McpRegistry {
   async readAppResource(capabilityId: string): Promise<AppResource> {
     const grant = this.#requireGrant(capabilityId);
     this.#reauthorizeGrant(grant);
-    const result = await grant.server.client.readResource({ uri: grant.resourceUri });
-    if (result.contents.length !== 1) throw new Error('MCP App resource must contain exactly one item');
-    const content = result.contents[0];
-    if (content.uri !== grant.resourceUri || content.mimeType !== MCP_APP_MIME_TYPE) throw new Error('MCP App resource did not match its declaration');
-    const html = 'text' in content ? content.text : 'blob' in content ? decodeBase64(content.blob) : undefined;
-    if (typeof html !== 'string' || byteLength(html) > 1_048_576) throw new Error('MCP App resource is invalid or too large');
-    const ui = parseResourceUi(content._meta);
-    return { html, csp: ui.csp, permissions: ui.permissions, appTools: [...grant.appTools] };
+    const resource = await readMCPAppResource({
+      client: grant.server.client as unknown as Parameters<typeof readMCPAppResource>[0]['client'],
+      uri: grant.resourceUri,
+    });
+    if (byteLength(resource.html) > 1_048_576) throw new Error('MCP App resource is invalid or too large');
+    return { ...resource, meta: parseResourceMeta(resource.meta), appTools: [...grant.appTools] };
   }
 
   async callAppTool(capabilityId: string, name: string, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
@@ -120,7 +122,7 @@ export class McpRegistry {
     this.#reauthorizeGrant(grant);
     if (!grant.appTools.has(name)) throw new Error('This app is not allowed to call that tool');
     const current = grant.server.tools.find((tool) => tool.name === name);
-    if (!current || !visibility(current).includes('app') || resourceUriFor(current) !== grant.resourceUri) throw new Error('This app tool is no longer available');
+    if (!current || !visibleToolNames(grant.server.tools).appVisible.has(current.name) || resourceUriFor(current) !== grant.resourceUri) throw new Error('This app tool is no longer available');
     return grant.server.client.callTool({ name, arguments: objectArguments(args) }, { signal });
   }
 
@@ -134,7 +136,7 @@ export class McpRegistry {
     const existing = [...this.#grants].find(([, grant]) => grant.server === server && grant.sourceTool === sourceTool && grant.resourceUri === resourceUri);
     const capabilityId = existing?.[0] ?? randomUUID();
     if (!existing) this.#grants.set(capabilityId, { server, sourceTool, resourceUri, appTools });
-    return { capabilityId, resourceUri, mimeType: MCP_APP_MIME_TYPE };
+    return { capabilityId, resourceUri, mimeType: MCP_APP_MIME_TYPE, appTools: [...appTools] };
   }
 
   #requireGrant(capabilityId: string) {
@@ -145,7 +147,7 @@ export class McpRegistry {
 
   #reauthorizeGrant(grant: AppGrant) {
     const source = grant.server.tools.find((tool) => tool.name === grant.sourceTool);
-    if (!source || resourceUriFor(source) !== grant.resourceUri || !visibility(source).includes('model')) {
+    if (!source || resourceUriFor(source) !== grant.resourceUri || !visibleToolNames(grant.server.tools).modelVisible.has(source.name)) {
       throw new Error('MCP App capability is no longer valid');
     }
   }
@@ -163,7 +165,7 @@ export class McpRegistry {
       const client = new Client({ name: 'agent-widget-starter', version: '0.2.0' }, {
         capabilities: {
           extensions: {
-            'io.modelcontextprotocol/ui': { mimeTypes: [MCP_APP_MIME_TYPE] },
+            'io.modelcontextprotocol/ui': { mimeTypes: [...mcpAppClientCapabilities.extensions['io.modelcontextprotocol/ui'].mimeTypes] },
           },
         },
       });
@@ -215,20 +217,24 @@ function resourceUriFor(tool: Tool): string | undefined {
   return typeof uri === 'string' && uri.startsWith('ui://') ? uri : undefined;
 }
 
-function visibility(tool: Tool): ('model' | 'app')[] {
-  const meta = isRecord(tool._meta) ? tool._meta : undefined;
-  const ui = meta && isRecord(meta.ui) ? meta.ui : undefined;
-  if (ui?.visibility === undefined) return ['model', 'app'];
-  if (!Array.isArray(ui.visibility)) return [];
-  return ui.visibility.filter((item): item is 'model' | 'app' => item === 'model' || item === 'app');
+function visibleToolNames(tools: Tool[]) {
+  const definitions = splitMCPAppTools({ tools } as Parameters<typeof splitMCPAppTools>[0]);
+  return {
+    modelVisible: new Set(definitions.modelVisible.tools.map((tool) => tool.name)),
+    appVisible: new Set(definitions.appVisible.tools.map((tool) => tool.name)),
+  };
 }
 
-function parseResourceUi(meta: unknown): { csp?: McpUiCsp; permissions?: McpUiPermissions } {
-  if (!isRecord(meta) || !isRecord(meta.ui)) return {};
-  const ui = meta.ui;
+function parseResourceMeta(meta: unknown): MCPAppResource['meta'] {
+  if (meta === undefined) return undefined;
+  if (!isRecord(meta)) throw new Error('MCP App resource metadata is invalid');
   const allowedUi = new Set(['csp', 'permissions', 'domain', 'prefersBorder']);
-  if (Object.keys(ui).some((key) => !allowedUi.has(key))) throw new Error('MCP App resource metadata contains unsupported fields');
-  return { csp: parseCsp(ui.csp), permissions: parsePermissions(ui.permissions) };
+  if (Object.keys(meta).some((key) => !allowedUi.has(key))) throw new Error('MCP App resource metadata contains unsupported fields');
+  return {
+    ...meta,
+    csp: parseCsp(meta.csp) as MCPAppResource['meta'] extends { csp?: infer Csp } ? Csp : never,
+    permissions: parsePermissions(meta.permissions),
+  } as MCPAppResource['meta'];
 }
 
 function parseCsp(value: unknown): McpUiCsp | undefined {
@@ -273,12 +279,6 @@ export function modelToolName(serverId: string, toolName: string) {
 
 function safeName(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_') || '_';
-}
-
-function decodeBase64(value: string) {
-  const buffer = Buffer.from(value, 'base64');
-  if (buffer.toString('base64').replace(/=+$/, '') !== value.replace(/=+$/, '')) throw new Error('MCP App resource blob is invalid');
-  return buffer.toString('utf8');
 }
 
 function byteLength(value: string) {

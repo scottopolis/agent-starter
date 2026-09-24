@@ -19,6 +19,7 @@ export function createDemoMcpServer() {
   }, async ({ label, value }) => ({
     content: [{ type: 'text', text: `${label}: ${value}` }],
     structuredContent: { label, value },
+    _meta: { demo: 'CLIENT_ONLY_COUNTER_METADATA' },
   }));
 
   registerAppTool(server, 'increment-counter', {

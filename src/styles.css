@@ -91,6 +91,7 @@ button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px sol
 .markdown blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid #a9bbb5; color: var(--muted); }
 .markdown table { display: block; max-width: 100%; overflow: auto; border-collapse: collapse; }
 .markdown th, .markdown td { padding: 5px 8px; border: 1px solid #ccd7d3; text-align: left; }
+.markdown th:first-child, .markdown td:first-child { white-space: nowrap; }
 
 .typing { display: flex; width: fit-content; gap: 4px; margin: -8px 0 22px 40px; padding: 11px 15px; border-radius: 6px 18px 18px 18px; background: #f0f3f1; }
 .typing i { width: 5px; height: 5px; border-radius: 50%; background: #75827e; animation: typing 1s ease-in-out infinite; }

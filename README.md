@@ -6,7 +6,7 @@ MCP is optional. With no provider or MCP configuration, ordinary chat runs in de
 
 ## Quickstart: ordinary chat
 
-Requirements: Node.js 20.19 or newer.
+Requirements: Node.js 22 or newer. The pinned AI SDK React and MCP packages require Node 22.
 
 ```bash
 npm ci
@@ -18,7 +18,13 @@ Open `http://localhost:5173/` for standalone chat or `http://localhost:5173/exam
 
 ### Connect an LLM provider
 
-Set `OPENAI_API_KEY` in `.env`; the backend uses `OPENAI_MODEL` (default `gpt-4o-mini`). Provider credentials stay in Node and are never returned to the browser. Replace `streamOpenAI` in `server/index.ts` or use another AI SDK provider to connect your own LLM backend.
+Set `OPENAI_API_KEY` in `.env`; the executable backend uses `OPENAI_MODEL` (default `gpt-4o-mini`). Provider credentials stay in Node and are never returned to the browser. `MAX_STEPS` configures the agent tool-loop limit from 1–100 (default 5).
+
+`createChatServer` accepts any AI SDK `LanguageModel`, so applications can inject another provider without changing the server module. Environment and OpenAI wiring live only in the executable entry point:
+
+```ts
+const server = createChatServer({ model: myLanguageModel, maxSteps: 8, mcp: registry });
+```
 
 ## Quickstart: real local MCP App
 
@@ -40,7 +46,7 @@ Set `MCP_SERVERS` to a JSON array. Each `id` namespaces model-facing tool names;
 MCP_SERVERS=[{"id":"support","url":"https://mcp.example.com/mcp","headers":{"Authorization":"Bearer server-only-token"}}]
 ```
 
-At request time, the backend connects with the official MCP client, advertises `io.modelcontextprotocol/ui`, discovers tools, hides app-only tools from the model, converts model-visible schemas into AI SDK tools, executes real tool calls, and streams tool input/result/app metadata through the starter's small NDJSON transport. A tool becomes an inline app when `_meta.ui.resourceUri` is a `ui://` URI and `resources/read` returns `text/html;profile=mcp-app`.
+At request time, the backend connects with the official MCP client, advertises `io.modelcontextprotocol/ui`, discovers tools, hides app-only tools from the model, converts model-visible schemas into AI SDK tools, executes real tool calls, and streams standard AI SDK UI-message parts over SSE. A tool becomes an inline app when `_meta.ui.resourceUri` is a `ui://` URI and `resources/read` returns `text/html;profile=mcp-app`.
 
 This starter supports Streamable HTTP. Add another server-side MCP transport in `server/mcp.ts` if you need stdio; do not connect the browser directly to credentialed MCP services.
 
@@ -49,33 +55,32 @@ This starter supports Streamable HTTP. Add another server-side MCP transport in 
 | Concern | Source |
 | --- | --- |
 | Layout, copy, normal tool cards | `src/chat/ChatWidget.tsx` |
-| Inline app host and AppBridge lifecycle | `src/chat/McpApp.tsx` |
+| Inline app policy and AI SDK renderer | `src/chat/McpApp.tsx` |
 | Colors, responsive layout, app frame | `src/styles.css` |
-| React chat state | `src/chat/use-chat.ts` |
-| NDJSON transport contract | `src/chat/types.ts`, `src/transport/http-chat-transport.ts` |
+| Default React state and UI-message rendering | `src/chat/ChatWidget.tsx` |
+| HTTP transport wiring | `src/main.tsx`, `src/embed-main.tsx` |
 | LLM/mock orchestration and browser API | `server/index.ts` |
 | MCP connection, discovery, grants, calls | `server/mcp.ts` |
 | Separate-origin sandbox and CSP | `server/sandbox-server.ts` |
 | Local MCP server/app fixture | `server/demo-mcp.ts` |
 | Embed launcher and parent protocol | `src/embed/loader.ts`, `src/embed-main.tsx` |
 
-The frontend deliberately keeps the narrow `ChatTransport`; it does not require AI SDK `UIMessage`. To use an existing chat endpoint, implement `stream()` and pass it to `ChatWidget`. Authentication headers belong in that adapter:
+The default app uses `@ai-sdk/react` `useChat`, AI SDK `UIMessage`, and `DefaultChatTransport`. To connect another standard UI-message endpoint, pass a transport to `ChatWidget`; authentication headers belong in that transport:
 
 ```ts
-const transport = new HttpChatTransport({
-  endpoint: '/api/my-assistant',
-  getHeaders: async () => ({ authorization: `Bearer ${await getAccessToken()}` }),
+const transport = new DefaultChatTransport({
+  api: '/api/my-assistant',
+  headers: async () => ({ authorization: `Bearer ${await getAccessToken()}` }),
 });
 ```
 
+The rendering code consumes standard UI-message text and tool parts rather than a starter-specific message model. That makes it source-compatible with other AI SDK-shaped state owners, but it is not a promise that different connection hooks are interchangeable. In particular, an application using persisted WebSockets, recovery, approvals, or browser-executed tools should retain its own hook/backend and adapt the source rendering boundary instead of adopting this sample HTTP server.
+
 ## Browser/backend contracts
 
-Chat remains newline-delimited JSON. Text and tool updates are:
+`POST /api/chat` uses the [AI SDK UI message stream protocol](https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol) (`text/event-stream`). The browser sends `{ id, messages, trigger, messageId? }`; streamed text and tool calls/results use standard `UIMessageChunk` events.
 
-```json
-{"type":"text-delta","text":"Hello"}
-{"type":"tool","tool":{"id":"call-1","name":"support__lookup","status":"complete","input":{},"output":{},"app":{"capabilityId":"opaque-id","resourceUri":"ui://support/view.html","mimeType":"text/html;profile=mcp-app"}}}
-```
+The sample server owns authoritative conversation history in memory, keyed by chat ID. It accepts only the latest validated user message from a submit request and does not trust browser-supplied assistant/tool outputs. Server-generated tool calls/results persist across turns. This is safe for a single sample process, not durable storage: conversations disappear on restart and production hosts must bind persistent history to authenticated users.
 
 The browser can use only the opaque capability issued for a discovered app tool:
 
@@ -106,7 +111,7 @@ MCP_EMBED_ANCESTOR_ORIGINS=https://www.example.com,https://portal.example.com
 
 Both `dev:sandbox` and `start:sandbox` load these values and `MCP_SANDBOX_PORT` from `.env`. The service also requires a matching widget request referrer, emits restrictive response headers, validates structured CSP origins, and denies undeclared network/frame/base access. It never inserts raw CSP directives. Host and proxy validate exact `postMessage` window sources and origins; the proxy accepts the inner app only from its opaque (`null`) origin.
 
-The official `@modelcontextprotocol/ext-apps` `AppBridge` handles the Apps protocol. The host forwards complete tool input/results, app-only calls, safe absolute HTTP(S) open-link requests, bounded height changes, initialization timeouts, and graceful teardown. Failures retain a non-interactive tool-result fallback.
+The pinned experimental `@ai-sdk/react` MCP App renderer handles the Apps bridge lifecycle, and `@ai-sdk/mcp` supplies discovery/resource helpers. The surrounding host still enforces opaque capabilities, app-tool allowlists, exact origins, sandbox CSP, safe absolute HTTP(S) links, bounded height, and initialization timeout. It forwards complete browser-facing tool results—including MCP `_meta`—while `toModelOutput` excludes `_meta` from model input. Failures retain a readable non-interactive tool-result fallback. Because the React renderer is experimental, keep its version pinned and rerun the security and browser tests before upgrading it.
 
 For a production build, serve the widget files/API from your chat origin and run `npm run start:sandbox` behind the configured sandbox origin. Never collapse the sandbox onto the widget origin or replace it with direct `srcdoc` in the host page.
 
@@ -152,7 +157,7 @@ npm run build
 npm audit
 ```
 
-Tests cover ordinary chat with MCP disabled, real fixture discovery/resource/tool calls, app/model error semantics, denied capabilities/tools, exact source/origin checks, restrictive CSP parsing, embed behavior, streaming regressions, and transport parsing.
+Tests cover ordinary chat with MCP disabled, standard SSE transport, server-owned tool history, browser-history forgery rejection, `_meta` separation, real fixture discovery/resource/tool calls, delayed app initialization, app/model error semantics, denied capabilities/tools, exact source/origin checks, restrictive CSP parsing, embed behavior, and streaming races.
 
 ## License and provenance
 

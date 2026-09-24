@@ -68,12 +68,11 @@ export function buildCsp(hostOrigin: string, csp?: McpUiCsp, embedAncestorOrigin
 }
 
 function sandboxScript(hostOrigin: string, csp: McpUiCsp | undefined, permissions: McpUiPermissions | undefined) {
-  const expected = JSON.stringify({ csp, permissions });
   const allow = buildAllowAttribute(permissions);
   return `(() => {
     'use strict';
     const EXPECTED_HOST_ORIGIN = ${JSON.stringify(hostOrigin)};
-    const EXPECTED_POLICY = ${JSON.stringify(expected)};
+    const EXPECTED_ALLOW = ${JSON.stringify(allow)};
     const MAX_MESSAGE_BYTES = 1048576;
     let appFrame;
     const announceReady = () => window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready', params: {} }, EXPECTED_HOST_ORIGIN);
@@ -85,8 +84,10 @@ function sandboxScript(hostOrigin: string, csp: McpUiCsp | undefined, permission
       if (event.source === window.parent) {
         if (event.origin !== EXPECTED_HOST_ORIGIN || !valid(event.data) || !bounded(event.data)) return;
         if (event.data.method === 'ui/notifications/sandbox-resource-ready') {
-          if (appFrame || JSON.stringify({ csp: event.data.params?.csp, permissions: event.data.params?.permissions }) !== EXPECTED_POLICY) return;
-          if (event.data.params?.sandbox !== 'allow-scripts allow-forms' || typeof event.data.params?.html !== 'string') return;
+          if (appFrame || event.data.params?.sandbox !== 'allow-scripts allow-forms'
+            || typeof event.data.params?.html !== 'string'
+            || (event.data.params?.allow || '') !== EXPECTED_ALLOW
+            || (event.data.params?.csp !== undefined && typeof event.data.params.csp !== 'string')) return;
           window.clearInterval(readyInterval);
           appFrame = document.createElement('iframe');
           appFrame.setAttribute('sandbox', 'allow-scripts allow-forms');
@@ -139,10 +140,10 @@ function parsePermissionsParam(value: string | null): McpUiPermissions | undefin
 
 function buildAllowAttribute(permissions?: McpUiPermissions) {
   return [
-    permissions?.camera && 'camera *',
-    permissions?.microphone && 'microphone *',
-    permissions?.geolocation && 'geolocation *',
-    permissions?.clipboardWrite && 'clipboard-write *',
+    permissions?.camera && 'camera',
+    permissions?.microphone && 'microphone',
+    permissions?.geolocation && 'geolocation',
+    permissions?.clipboardWrite && 'clipboard-write',
   ].filter(Boolean).join('; ');
 }
 

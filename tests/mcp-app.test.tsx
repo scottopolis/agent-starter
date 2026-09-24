@@ -1,66 +1,107 @@
-import { act, render, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import type { DynamicToolUIPart } from 'ai';
 
-const bridgeMock = vi.hoisted(() => ({ instances: [] as any[] }));
-vi.mock('@modelcontextprotocol/ext-apps/app-bridge', () => ({
-  AppBridge: class {
-    listeners = new Map<string, (...args: any[]) => void>();
-    sendToolInput = vi.fn().mockResolvedValue({});
-    sendToolResult = vi.fn().mockResolvedValue({});
-    connect = vi.fn().mockResolvedValue({});
-    close = vi.fn();
-    teardownResource = vi.fn().mockResolvedValue({});
-    addEventListener(name: string, listener: (...args: any[]) => void) { this.listeners.set(name, listener); }
-    constructor() { bridgeMock.instances.push(this); }
-  },
-}));
-
-import McpApp, { ExactPostMessageTransport, parseResource } from '../src/chat/McpApp';
+import McpApp, { parseResource } from '../src/chat/McpApp';
 
 describe('MCP App host boundary', () => {
-  it('requires both the exact iframe source and sandbox origin', async () => {
-    const target = { postMessage: vi.fn() } as unknown as Window;
-    const transport = new ExactPostMessageTransport(target, 'https://sandbox.example');
-    const received = vi.fn();
-    transport.onmessage = received;
-    await transport.start();
-
-    const message = { jsonrpc: '2.0', method: 'ping', id: 1 };
-    window.dispatchEvent(new MessageEvent('message', { data: message, source: window, origin: 'https://sandbox.example' }));
-    window.dispatchEvent(new MessageEvent('message', { data: message, source: target, origin: 'https://attacker.example' }));
-    expect(received).not.toHaveBeenCalled();
-
-    window.dispatchEvent(new MessageEvent('message', { data: message, source: target, origin: 'https://sandbox.example' }));
-    expect(received).toHaveBeenCalledOnce();
-    await transport.close();
-  });
+  afterEach(() => vi.unstubAllGlobals());
 
   it('rejects undeclared resource fields, CSP directives, and oversized tool lists', () => {
-    expect(() => parseResource({ html: '<p>ok</p>', appTools: [], resourceUrl: 'https://attacker.example' })).toThrow('Invalid MCP App resource');
-    expect(() => parseResource({ html: '<p>ok</p>', appTools: [], csp: { 'script-src': ['*'] } })).toThrow('Invalid MCP App CSP');
-    expect(() => parseResource({ html: '<p>ok</p>', appTools: Array.from({ length: 201 }, (_, index) => `tool-${index}`) })).toThrow('Invalid app tool list');
+    const base = { uri: 'ui://counter/app.html', mimeType: 'text/html;profile=mcp-app', html: '<p>ok</p>', appTools: [] };
+    expect(() => parseResource({ ...base, resourceUrl: 'https://attacker.example' })).toThrow('Invalid MCP App resource');
+    expect(() => parseResource({ ...base, meta: { csp: { 'script-src': ['*'] } } })).toThrow('Invalid MCP App CSP');
+    expect(() => parseResource({ ...base, appTools: Array.from({ length: 201 }, (_, index) => `tool-${index}`) })).toThrow('Invalid app tool list');
   });
 
-  it('sends the latest completed tool result once after delayed initialization', async () => {
-    bridgeMock.instances.length = 0;
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ html: '<p>counter</p>', appTools: [] }),
-    }));
-    const running = {
-      id: 'call-1', name: 'counter', status: 'running' as const, input: { amount: 2 },
-      app: { capabilityId: 'cap-1', resourceUri: 'ui://counter/app.html', mimeType: 'text/html;profile=mcp-app' as const },
-    };
-    const { rerender } = render(<McpApp tool={running} />);
-    await waitFor(() => expect(bridgeMock.instances).toHaveLength(1));
-    const bridge = bridgeMock.instances[0];
+  it('accepts initialization only from the exact sandbox frame and origin', async () => {
+    stubResource();
+    const part = runningPart();
+    const { unmount } = render(<McpApp part={part} fallback={<div>Fallback</div>} />);
+    const iframe = await screen.findByTitle('MCP App') as HTMLIFrameElement;
+    const postMessage = vi.spyOn(iframe.contentWindow!, 'postMessage').mockImplementation(() => undefined);
 
-    rerender(<McpApp tool={{ ...running, status: 'complete', output: { content: [{ type: 'text', text: 'final' }] } }} />);
-    await act(async () => { bridge.listeners.get('initialized')(); });
+    await act(async () => {
+      dispatchFrom(window, 'http://localhost:8789', initialized());
+      dispatchFrom(iframe.contentWindow!, 'https://attacker.example', initialized());
+    });
+    expect(toolNotifications(postMessage)).toEqual([]);
 
-    expect(bridge.sendToolInput).toHaveBeenCalledOnce();
-    expect(bridge.sendToolInput).toHaveBeenCalledWith({ arguments: { amount: 2 } });
-    expect(bridge.sendToolResult).toHaveBeenCalledOnce();
-    expect(bridge.sendToolResult).toHaveBeenCalledWith({ content: [{ type: 'text', text: 'final' }] });
-    vi.unstubAllGlobals();
+    await act(async () => dispatchFrom(iframe.contentWindow!, 'http://localhost:8789', initialized()));
+    await waitFor(() => expect(toolNotifications(postMessage)).toEqual([
+      expect.objectContaining({ method: 'ui/notifications/tool-input', params: { arguments: { amount: 2 } } }),
+    ]));
+    unmount();
+  });
+
+  it('sends a final result that arrives before delayed initialization exactly once', async () => {
+    stubResource();
+    const { rerender, unmount } = render(<McpApp part={runningPart()} fallback={<div>Fallback</div>} />);
+    const iframe = await screen.findByTitle('MCP App') as HTMLIFrameElement;
+    const postMessage = vi.spyOn(iframe.contentWindow!, 'postMessage').mockImplementation(() => undefined);
+    rerender(<McpApp part={completedPart()} fallback={<div>Fallback</div>} />);
+    await act(async () => undefined);
+    expect(toolNotifications(postMessage)).toEqual([]);
+
+    await act(async () => dispatchFrom(iframe.contentWindow!, 'http://localhost:8789', initialized()));
+    await waitFor(() => expect(toolNotifications(postMessage)).toEqual([
+      expect.objectContaining({ method: 'ui/notifications/tool-input', params: { arguments: { amount: 2 } } }),
+      expect.objectContaining({ method: 'ui/notifications/tool-result', params: { content: [{ type: 'text', text: 'final' }] } }),
+    ]));
+    unmount();
   });
 });
+
+function stubResource() {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    uri: 'ui://counter/app.html',
+    mimeType: 'text/html;profile=mcp-app',
+    html: '<p>counter</p>',
+    appTools: [],
+  }), { status: 200, headers: { 'content-type': 'application/json' } })));
+}
+
+function runningPart(): DynamicToolUIPart {
+  return {
+    type: 'dynamic-tool',
+    toolCallId: 'call-1',
+    toolName: 'counter',
+    state: 'input-available',
+    input: { amount: 2 },
+    toolMetadata: { app: {
+      capabilityId: 'cap-1',
+      resourceUri: 'ui://counter/app.html',
+      mimeType: 'text/html;profile=mcp-app',
+    } },
+  };
+}
+
+function completedPart(): DynamicToolUIPart {
+  const running = runningPart();
+  return {
+    type: running.type,
+    toolCallId: running.toolCallId,
+    toolName: running.toolName,
+    toolMetadata: running.toolMetadata,
+    state: 'output-available',
+    input: { amount: 2 },
+    output: { content: [{ type: 'text', text: 'final' }] },
+  };
+}
+
+function initialized() {
+  return { jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} };
+}
+
+function dispatchFrom(source: Window, origin: string, data: unknown) {
+  const event = new MessageEvent('message', { data });
+  Object.defineProperties(event, {
+    source: { value: source },
+    origin: { value: origin },
+  });
+  window.dispatchEvent(event);
+}
+
+function toolNotifications(postMessage: { mock: { calls: any[][] } }) {
+  return postMessage.mock.calls.map((call) => call[0]).filter((message: any) =>
+    message?.method === 'ui/notifications/tool-input' || message?.method === 'ui/notifications/tool-result');
+}

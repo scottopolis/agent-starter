@@ -80,9 +80,11 @@ The rendering code consumes standard UI-message text and tool parts rather than 
 
 ## Browser/backend contracts
 
-`POST /api/chat` uses the [AI SDK UI message stream protocol](https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol) (`text/event-stream`). The browser sends `{ id, messages, trigger, messageId? }`; streamed text and tool calls/results use standard `UIMessageChunk` events.
+`POST /api/chat` uses the [AI SDK UI message stream protocol](https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol) (`text/event-stream`). The browser sends `{ id, messages, trigger, messageId? }`; streamed text and tool calls/results use standard `UIMessageChunk` events. This sample accepts text-only user parts (up to 16,000 characters); it does not accept file or custom data parts. Add a shared application schema before enabling those inputs.
 
-The sample server owns authoritative conversation history in memory, keyed by chat ID. It accepts only the latest validated user message or an approval decision that matches a pending server-generated request; it does not trust browser-supplied tool inputs or outputs. Server-generated tool calls/results persist across turns. This is safe for a single sample process, not durable storage: conversations and the per-process approval signing key disappear on restart, and production hosts must bind persistent history to authenticated users.
+The sample server owns authoritative conversation history in memory, keyed by chat ID. It accepts only the latest validated user message or an approval decision that matches a pending server-generated request; it does not trust browser-supplied tool inputs or outputs. Server-generated tool calls/results persist across turns. Conversations expire after 30 minutes, the least recently used entries are capped at 250, and overlapping turns for one conversation are rejected. `createChatServer` accepts `conversationTtlMs` and `maxConversations` to adjust those bounds.
+
+This is safe only for a single sample process, not durable storage or tenant authorization: conversations and the per-process approval signing key disappear on restart, and the browser-generated opaque chat ID is not an authenticated identity. Production hosts must derive the conversation owner server-side and bind persistent history to that authenticated user/session. The sample also rejects regeneration of any assistant turn containing a tool call because replay could repeat a side effect. A production implementation may instead use tool classifications and persisted idempotency records.
 
 The browser can use only the opaque capability issued for a discovered app tool:
 
@@ -144,9 +146,10 @@ This is a starter, not an authorization gateway. Before production:
 
 - Authenticate every browser request and derive user/tenant identity server-side. Bind app capabilities to that authenticated session and conversation; never trust browser identity or assume this sample proxy grants tenant access.
 - Authorize each MCP server, model-visible tool, resource, and app-initiated tool call for the current tenant and user. Add approval for consequential actions.
+- Enforce approvals and action-specific authorization on the server. A confirmation UI alone is not an authorization boundary; persist approval and tool-operation IDs if an interrupted turn must be safely resumed or retried.
 - Store MCP/provider credentials in a secret manager. Redact logs and errors; never put credentials in `VITE_*` variables or app resources.
 - Add per-user/IP/tenant rate limits, request/tool-result/token size limits, timeouts, concurrency and spend budgets. The sample has basic body, app HTML, CSP, and message limits only.
-- Add persistence, consent, retention/deletion, moderation, structured audit logs, tracing, health checks, and safe retry policy appropriate to your product.
+- Add persistence, consent, retention/deletion, moderation, structured audit logs, tracing, health checks, and safe retry policy appropriate to your product. Record tool lifecycle transitions before and after consequential calls so a stream failure cannot make a retry duplicate an external side effect.
 - Review requested app domains/permissions against your own allow/block policy. Sandboxing limits technical access but does not prevent deceptive UI or all resource-exhaustion attacks.
 
 ## Checks

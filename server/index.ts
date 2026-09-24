@@ -23,6 +23,8 @@ import { McpRegistry, parseMcpConfig, type DiscoveredTool } from './mcp.js';
 
 const maxBodyBytes = 256_000;
 const defaultInstructions = 'You are a concise, friendly product assistant. Use Markdown when it improves readability. Use the available MCP tools when relevant.';
+const defaultConversationTtlMs = 30 * 60 * 1_000;
+const defaultMaxConversations = 250;
 
 export type ChatServerOptions = Readonly<{
   model?: LanguageModel;
@@ -30,6 +32,8 @@ export type ChatServerOptions = Readonly<{
   maxSteps?: number;
   instructions?: string;
   mcp?: McpRegistry;
+  conversationTtlMs?: number;
+  maxConversations?: number;
 }>;
 
 type ChatRequest = Readonly<{
@@ -45,11 +49,20 @@ export function createChatServer({
   maxSteps = 5,
   instructions = defaultInstructions,
   mcp = new McpRegistry([]),
+  conversationTtlMs = defaultConversationTtlMs,
+  maxConversations = defaultMaxConversations,
 }: ChatServerOptions = {}) {
   if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 100) {
     throw new Error('maxSteps must be an integer between 1 and 100');
   }
-  const conversations = new Map<string, UIMessage[]>();
+  if (!Number.isSafeInteger(conversationTtlMs) || conversationTtlMs < 1) {
+    throw new Error('conversationTtlMs must be a positive integer');
+  }
+  if (!Number.isSafeInteger(maxConversations) || maxConversations < 1) {
+    throw new Error('maxConversations must be a positive integer');
+  }
+  const conversations = new Map<string, { messages: UIMessage[]; touchedAt: number }>();
+  const activeConversations = new Set<string>();
   const approvalSecret = randomBytes(32);
 
   return createServer(async (request, response) => {
@@ -62,6 +75,7 @@ export function createChatServer({
     const abort = () => disconnect.abort();
     request.once('aborted', abort);
     response.once('close', abort);
+    let activeConversationId: string | undefined;
     try {
       if (request.method === 'POST' && request.url === '/api/mcp/apps/resource') {
         const body = exactObject(await readJson(request), ['capabilityId']);
@@ -82,8 +96,11 @@ export function createChatServer({
       }
 
       const chatRequest = parseChatRequest(await readJson(request));
-      const messages = authoritativeMessages(chatRequest, conversations.get(chatRequest.id));
-      conversations.set(chatRequest.id, messages);
+      if (activeConversations.has(chatRequest.id)) throw new RequestError(409, 'This conversation is already processing a message');
+      activeConversationId = chatRequest.id;
+      activeConversations.add(chatRequest.id);
+      const messages = authoritativeMessages(chatRequest, getConversation(chatRequest.id));
+      save(messages);
       const discovered = mcp.enabled ? await mcp.discover() : [];
       const webResponse = model
         ? await providerResponse({ model, instructions, maxSteps, messages, discovered, mcp, approvalSecret, signal: disconnect.signal, persist: save })
@@ -91,7 +108,21 @@ export function createChatServer({
       await sendWebResponse(response, webResponse);
 
       function save(next: UIMessage[]) {
-        conversations.set(chatRequest.id, next.slice(-100));
+        conversations.delete(chatRequest.id);
+        conversations.set(chatRequest.id, { messages: next.slice(-100), touchedAt: Date.now() });
+        while (conversations.size > maxConversations) conversations.delete(conversations.keys().next().value!);
+      }
+
+      function getConversation(id: string) {
+        const now = Date.now();
+        for (const [storedId, conversation] of conversations) {
+          if (now - conversation.touchedAt >= conversationTtlMs) conversations.delete(storedId);
+        }
+        const conversation = conversations.get(id);
+        if (!conversation) return undefined;
+        conversations.delete(id);
+        conversations.set(id, { ...conversation, touchedAt: now });
+        return conversation.messages;
       }
     } catch (error) {
       if (disconnect.signal.aborted || response.destroyed) return;
@@ -102,6 +133,7 @@ export function createChatServer({
       const message = error instanceof RequestError ? error.message : 'The request could not be completed';
       json(response, error instanceof RequestError ? error.status : 400, { error: message }, { 'cache-control': 'no-store' });
     } finally {
+      if (activeConversationId) activeConversations.delete(activeConversationId);
       request.removeListener('aborted', abort);
       response.removeListener('close', abort);
     }
@@ -241,7 +273,11 @@ function authoritativeMessages(request: ChatRequest, stored: UIMessage[] = []): 
     const assistantIndex = request.messageId
       ? stored.findIndex((message) => message.id === request.messageId && message.role === 'assistant')
       : lastAssistantIndex(stored);
-    return assistantIndex < 0 ? stored : stored.slice(0, assistantIndex);
+    if (assistantIndex < 0) return stored;
+    if (stored[assistantIndex]!.parts.some(isToolPart)) {
+      throw new RequestError(409, 'Messages that used tools cannot be regenerated safely');
+    }
+    return stored.slice(0, assistantIndex);
   }
   const incoming = request.messages.at(-1);
   if (incoming?.role === 'assistant') return applyApprovalResponses(stored, incoming);
@@ -412,7 +448,13 @@ function json(response: ServerResponse, status: number, body: unknown, extraHead
 }
 
 function safeError(error: unknown) {
-  return error instanceof Error ? error.message : 'The request could not be completed';
+  const reference = crypto.randomUUID();
+  console.error(`[chat error ${reference}]`, error);
+  return `The request could not be completed. Reference: ${reference}`;
+}
+
+function isToolPart(part: UIMessage['parts'][number]) {
+  return 'toolCallId' in part;
 }
 
 function isRecord(value: unknown): value is Record<string, any> {

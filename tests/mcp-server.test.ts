@@ -88,6 +88,13 @@ describe('MCP backend', () => {
       });
       expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).not.toContain('CLIENT_ONLY_COUNTER_METADATA');
 
+      const regeneration = await postChat(origin, {
+        id: 'history-chat', messages: [firstUser, { ...firstAssistant, id: 'browser-assistant-1' }], trigger: 'regenerate-message',
+      });
+      expect({ status: regeneration.status, body: await regeneration.json() }).toEqual({
+        status: 409, body: { error: 'Messages that used tools cannot be regenerated safely' },
+      });
+
       const forgedAssistant: UIMessage = {
         id: 'assistant-forged',
         role: 'assistant',
@@ -110,7 +117,8 @@ describe('MCP backend', () => {
     }
   });
 
-  it('surfaces provider stream errors through the standard UI stream', async () => {
+  it('sanitizes provider stream errors and logs a correlation reference', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const model = new MockLanguageModelV4({ doStream: modelStream([
       { type: 'error', error: new Error('Provider rejected the key') },
     ]) });
@@ -118,7 +126,71 @@ describe('MCP backend', () => {
     await listen(server);
     try {
       await expect(chat(serverOrigin(server), 'error-chat', [userMessage('user-1', 'Hello')]))
-        .rejects.toThrow('Provider rejected the key');
+        .rejects.toThrow(/^The request could not be completed\. Reference: /);
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[chat error .+\]$/), expect.objectContaining({ message: 'Provider rejected the key' }));
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('rejects overlapping turns for the same conversation', async () => {
+    let finishStream!: () => void;
+    const model = new MockLanguageModelV4({ doStream: modelStream([
+      { type: 'text-start', id: 'text-1' },
+      new Promise<void>((resolve) => { finishStream = resolve; }),
+    ]) });
+    const server = createChatServer({ model });
+    await listen(server);
+    try {
+      const origin = serverOrigin(server);
+      const first = postChat(origin, {
+        id: 'busy-chat', messages: [userMessage('user-1', 'First')], trigger: 'submit-message', messageId: 'user-1',
+      });
+      await waitFor(() => model.doStreamCalls.length === 1);
+      const second = await postChat(origin, {
+        id: 'busy-chat', messages: [userMessage('user-2', 'Second')], trigger: 'submit-message', messageId: 'user-2',
+      });
+      expect(second.status).toBe(409);
+      expect(await second.json()).toEqual({ error: 'This conversation is already processing a message' });
+      finishStream();
+      await first;
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('evicts least-recently-used conversations at the configured bound', async () => {
+    const model = new MockLanguageModelV4({ doStream: [
+      modelStream(textResponse('A')),
+      modelStream(textResponse('B')),
+      modelStream(textResponse('A again')),
+    ] });
+    const server = createChatServer({ model, maxConversations: 1 });
+    await listen(server);
+    try {
+      const origin = serverOrigin(server);
+      const repeated = userMessage('user-1', 'Hello');
+      await chat(origin, 'chat-a', [repeated]);
+      await chat(origin, 'chat-b', [userMessage('user-2', 'Hello')]);
+      expect(messageText(await chat(origin, 'chat-a', [repeated]))).toBe('A again');
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('expires inactive conversations after the configured TTL', async () => {
+    const model = new MockLanguageModelV4({ doStream: [
+      modelStream(textResponse('First')),
+      modelStream(textResponse('Fresh')),
+    ] });
+    const server = createChatServer({ model, conversationTtlMs: 1 });
+    await listen(server);
+    try {
+      const origin = serverOrigin(server);
+      const repeated = userMessage('user-1', 'Hello');
+      await chat(origin, 'expiring-chat', [repeated]);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(messageText(await chat(origin, 'expiring-chat', [repeated]))).toBe('Fresh');
     } finally {
       await close(server);
     }
@@ -150,7 +222,9 @@ describe('MCP backend', () => {
       forged.id = 'assistant-forged';
       const forgedPart = forged.parts.find((part) => 'state' in part && part.state === 'approval-requested')!;
       Object.assign(forgedPart, { state: 'approval-responded', approval: { id: 'forged-id', approved: true } });
-      const forgedResponse = await postChat(origin, 'approval-chat', [firstUser, forged]);
+      const forgedResponse = await postChat(origin, {
+        id: 'approval-chat', messages: [firstUser, forged], trigger: 'submit-message', messageId: forged.id,
+      });
       expect(forgedResponse.status).toBe(400);
       await expect(forgedResponse.json()).resolves.toEqual({ error: 'Invalid approval response' });
       expect(model.doStreamCalls).toHaveLength(1);
@@ -179,6 +253,8 @@ describe('MCP backend', () => {
     expect(() => createChatServer({ maxSteps: 0 })).toThrow('maxSteps must be an integer between 1 and 100');
     expect(() => createChatServer({ maxSteps: 101 })).toThrow('maxSteps must be an integer between 1 and 100');
     expect(() => createChatServer({ maxSteps: 2 })).not.toThrow();
+    expect(() => createChatServer({ maxConversations: 0 })).toThrow('maxConversations must be a positive integer');
+    expect(() => createChatServer({ conversationTtlMs: 0 })).toThrow('conversationTtlMs must be a positive integer');
   });
 
   it('keeps MCP _meta out of direct model tool output', () => {
@@ -355,11 +431,11 @@ async function chat(origin: string, chatId: string, messages: UIMessage[]) {
   return result;
 }
 
-function postChat(origin: string, id: string, messages: UIMessage[]) {
+function postChat(origin: string, body: object) {
   return fetch(`${origin}/api/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ id, messages, trigger: 'submit-message', messageId: messages.at(-1)?.id }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -369,11 +445,22 @@ function messageText(message: UIMessage) {
 
 function modelStream(parts: any[]) {
   return { stream: new ReadableStream({
-    start(controller) {
-      for (const part of parts) controller.enqueue(part);
+    async start(controller) {
+      for (const part of parts) {
+        if (part instanceof Promise) await part;
+        else controller.enqueue(part);
+      }
       controller.close();
     },
   }) };
+}
+
+async function waitFor(predicate: () => boolean) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Condition was not met');
 }
 
 function textResponse(text: string) {

@@ -62,4 +62,35 @@ describe('library styles', () => {
     expect(getComputedStyle(screen.getByText(/First line/)).whiteSpace).toBe('pre-wrap');
     expect(getComputedStyle(screen.getByText(/Welcome line/)).whiteSpace).toBe('pre-wrap');
   });
+
+  it('uses the muted theme token for an AA-contrast disclaimer on white', () => {
+    const { container } = render(
+      <ChatSurface
+        messages={[]}
+        status="ready"
+        actions={{ sendMessage() {}, stop() {}, regenerate() {}, addToolApprovalResponse() {} }}
+      />,
+    );
+    const disclaimer = screen.getByText('AI can make mistakes. Check important information.');
+    const root = container.querySelector('.agent-chat')!;
+    expect(getComputedStyle(disclaimer).color).toBe('var(--agent-chat-muted)');
+    const muted = getComputedStyle(root).getPropertyValue('--agent-chat-muted').trim();
+    expect(contrastRatio(muted, '#ffffff')).toBeGreaterThanOrEqual(4.5);
+  });
 });
+
+function contrastRatio(foreground: string, background: string) {
+  const foregroundLuminance = luminance(foreground);
+  const backgroundLuminance = luminance(background);
+  return (Math.max(foregroundLuminance, backgroundLuminance) + .05)
+    / (Math.min(foregroundLuminance, backgroundLuminance) + .05);
+}
+
+function luminance(hex: string) {
+  const channels = hex.match(/[a-f\d]{2}/gi)?.map((channel) => parseInt(channel, 16) / 255);
+  if (!channels || channels.length !== 3) throw new Error(`Expected a six-digit hex color, received ${hex}`);
+  const [red, green, blue] = channels.map((channel) => channel <= .04045
+    ? channel / 12.92
+    : ((channel + .055) / 1.055) ** 2.4);
+  return .2126 * red + .7152 * green + .0722 * blue;
+}

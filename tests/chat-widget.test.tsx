@@ -186,6 +186,14 @@ describe('ChatWidget', () => {
     expect(screen.getByRole('region', { name: 'Support chat' })).toBeInTheDocument();
   });
 
+  it('exposes the conversation transcript as a polite additions-only live log', () => {
+    render(<ChatSurface messages={[]} status="ready" actions={surfaceActions()} />);
+    const transcript = screen.getByRole('log', { name: 'Conversation messages' });
+    expect(transcript).toHaveAttribute('aria-live', 'polite');
+    expect(transcript).toHaveAttribute('aria-relevant', 'additions');
+    expect(transcript).toHaveAttribute('aria-busy', 'false');
+  });
+
   it('shows progress after a submitted user message unless host status content replaces it', () => {
     const message: UIMessage = { id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'Waiting' }] };
     const { rerender } = render(<ChatSurface messages={[message]} status="submitted" actions={surfaceActions()} />);

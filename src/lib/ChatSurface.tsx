@@ -162,7 +162,16 @@ export function ChatSurface({
           <DefaultHeader title={title} onReset={onReset} onRequestClose={onRequestClose} />
         ) : header}
 
-        <div className="message-viewport" ref={viewportRef} onScroll={handleViewportScroll} aria-label="Conversation messages" aria-busy={busy}>
+        <div
+          className="message-viewport"
+          ref={viewportRef}
+          onScroll={handleViewportScroll}
+          role="log"
+          aria-label="Conversation messages"
+          aria-live="polite"
+          aria-relevant="additions"
+          aria-busy={busy}
+        >
           {messages.length === 0 && welcome !== null && (
             <div className="welcome">
               <div className="assistant-avatar">AI</div>

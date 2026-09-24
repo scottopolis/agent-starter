@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { DefaultChatTransport } from 'ai';
 import '@fontsource-variable/dm-sans';
 import '@fontsource-variable/manrope';
 
 import { ChatWidget } from './chat/ChatWidget';
 import { controlMessage, exactOrigin, parseControlMessage, parsePromptMessage } from './embed/protocol';
-import { HttpChatTransport } from './transport/http-chat-transport';
 import './styles.css';
 
 function EmbeddedApp() {
   const config = useMemo(() => readConfig(), []);
   const [prompt, setPrompt] = useState<{ id: string; text: string }>();
-  const transport = useMemo(() => new HttpChatTransport(), []);
+  const transport = useMemo(() => new DefaultChatTransport({ api: '/api/chat' }), []);
 
   useEffect(() => {
     if (!config) return;

@@ -3,6 +3,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
   type CSSProperties,
+  type Ref,
   type ReactNode,
   useEffect,
   useId,
@@ -61,6 +62,7 @@ export type ChatSurfaceProps = Readonly<{
   header?: ReactNode;
   statusContent?: ReactNode;
   beforeComposer?: ReactNode;
+  composerRef?: Ref<HTMLTextAreaElement>;
   composerPlaceholder?: string;
   disclaimer?: ReactNode;
   onReset?: () => void;
@@ -82,6 +84,7 @@ export function ChatSurface({
   header,
   statusContent,
   beforeComposer,
+  composerRef,
   composerPlaceholder = 'Ask a question…',
   disclaimer = 'AI can make mistakes. Check important information.',
   onReset,
@@ -153,7 +156,7 @@ export function ChatSurface({
   ].filter(Boolean).join(' ');
 
   return (
-    <main className={rootClassName} style={style}>
+    <div className={rootClassName} style={style}>
       <section className="chat-card" aria-label={title}>
         {header === undefined ? (
           <DefaultHeader title={title} onReset={onReset} onRequestClose={onRequestClose} />
@@ -190,6 +193,8 @@ export function ChatSurface({
             <label className="sr-only" htmlFor={composerId}>Message</label>
             <textarea
               id={composerId}
+              ref={composerRef}
+              data-agent-chat-composer=""
               rows={1}
               placeholder={composerPlaceholder}
               value={draft}
@@ -205,7 +210,7 @@ export function ChatSurface({
           {disclaimer !== null && <p>{disclaimer}</p>}
         </footer>
       </section>
-    </main>
+    </div>
   );
 }
 

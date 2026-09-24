@@ -1,12 +1,96 @@
-# Agent Widget Starter
+# Agent Widget
 
-A source-first, customizable AI chat widget. It includes a React standalone chat, an iframe embed and launcher, a Node/AI SDK backend, Human-in-the-Loop tool approvals, optional connections to external MCP servers, and isolated inline MCP App rendering. Everything is editable TypeScript, React, and CSS—there is no hosted account, proprietary runtime, bundled MCP server, or compiled output in the repository.
+A reusable, provider-neutral React chat surface for standard AI SDK UI messages, plus a thin working example. It includes a controlled component for applications that own chat state, a `useChat` convenience wrapper, scoped themeable CSS, and explicit rendering seams for tools, errors, status, and host controls.
+
+The example adds a standalone chat, iframe embed and launcher, Node/AI SDK backend, Human-in-the-Loop tool approvals, optional external MCP servers, and isolated inline MCP App rendering. Provider and MCP host code are example-only and are not imported by the library entry point.
 
 MCP is optional. With no provider or MCP configuration, ordinary chat runs in deterministic mock mode.
 
+## Install the library
+
+The package exports `ChatSurface`, `ChatWidget`, `DefaultToolRenderer`, their prop/context types, and `@scottopolis/agent-widget/styles.css`. `ai`, `@ai-sdk/react`, React, and React DOM are compatible peer dependencies; provider packages and the experimental MCP renderer are not library runtime dependencies.
+
+Use the controlled surface when the host already owns transport, persistence, recovery, or optimistic state:
+
+```tsx
+import { ChatSurface } from '@scottopolis/agent-widget';
+import '@scottopolis/agent-widget/styles.css';
+
+<ChatSurface
+  messages={chat.messages}
+  status={chat.status}
+  error={safeError}
+  actions={{
+    sendMessage: chat.sendMessage,
+    stop: chat.stop,
+    regenerate: chat.regenerate,
+    addToolApprovalResponse: chat.addToolApprovalResponse,
+    setMessages: chat.setMessages,
+  }}
+  header={<YourHeader />}
+  statusContent={isRecovering ? <RecoveryIndicator /> : null}
+  beforeComposer={<YourBrowserToolControls />}
+  renderError={(error, retry) => <SafeError error={error} retry={retry} />}
+  renderTool={(part, context) => {
+    if (!mayDisplayTool(part)) return null;
+    return renderKnownTool(part) ?? context.renderDefault();
+  }}
+/>
+```
+
+`renderTool` is authoritative when supplied: `null` suppresses a tool without rendering its name, input, result, or the default fallback. `actions` accepts `sendMessage({ text })`, `stop()`, `regenerate()`, `addToolApprovalResponse(response)`, and optional `setMessages(update)` for removing an empty assistant turn after stop. User content is rendered as literal React text; only assistant text is parsed as Markdown with raw HTML disabled.
+
+For a conventional AI SDK HTTP transport, `ChatWidget` owns `useChat` and accepts all presentation props above:
+
+```tsx
+import { DefaultChatTransport } from 'ai';
+import { ChatWidget } from '@scottopolis/agent-widget';
+import '@scottopolis/agent-widget/styles.css';
+
+<ChatWidget transport={new DefaultChatTransport({ api: '/api/chat' })} />
+```
+
+`ChatWidget.id` is an initial conversation ID, not a controlled prop. Remount the wrapper to switch to an externally selected ID. `requestedPrompt` is consumed once per prompt ID, including across the wrapper's New chat reset; supply a new ID to request another send.
+
+### Consume an exact merged revision from Git
+
+Pin the full merge commit so every installation receives the same source:
+
+```json
+{
+  "dependencies": {
+    "@scottopolis/agent-widget": "github:scottopolis/agent-starter#FULL_MERGE_COMMIT_SHA"
+  }
+}
+```
+
+The repository does not commit generated library output. Its `prepare` script builds ESM, CSS, and declarations when installed from Git. pnpm 10 may require explicit approval before it runs a Git dependency's build script; review the pinned source, run `pnpm approve-builds`, and approve `@scottopolis/agent-widget` if prompted. Commit the resulting pnpm build-policy and lockfile changes. If organizational policy forbids dependency build scripts, use a reviewed tarball produced by `npm pack`, or a future registry release; neither is published by this repository.
+
+### Styling and extension boundaries
+
+All library selectors are under `.agent-chat`; the stylesheet has no `:root`, `html`, `body`, global font, or global control rules. Override custom properties on the component or an ancestor:
+
+```css
+.my-assistant {
+  --agent-chat-accent: #173b33;
+  --agent-chat-accent-hover: #225347;
+  --agent-chat-header-text: white;
+  --agent-chat-header-muted: #cbdad5;
+  --agent-chat-avatar-bg: #dff1ea;
+  --agent-chat-paper: #fffefb;
+  --agent-chat-ink: #17211e;
+  --agent-chat-muted: #697672;
+  --agent-chat-line: #dfe6e3;
+}
+```
+
+Pass `className="my-assistant"`, or replace the default header with `header`. `header={null}`, `welcome={null}`, and `disclaimer={null}` suppress those defaults. `renderTool` is the tool/MCP boundary: call `context.renderDefault()` only when a raw default tool card is appropriate. Keep MCP credentials, authorization, sandbox policy, and consequential tool execution outside this library.
+
+Runtime branding can use the standard root `style` prop, which also types the variables above: `<ChatSurface style={{ '--agent-chat-accent': brandColor }} ... />`. Standalone mode defaults to a full-page presentation. `embedded` mode fills its containing block instead; give the parent an explicit height (for example `height: 620px`) or set `--agent-chat-height` on the surface.
+
 ## Quickstart: ordinary chat
 
-Requirements: Node.js 22 or newer. The pinned AI SDK React and MCP packages require Node 22.
+Requirements for the example: Node.js 22 or newer. Its pinned AI SDK React and MCP packages require Node 22.
 
 ```bash
 npm ci
@@ -32,7 +116,7 @@ In provider mode, ask **“Issue a demo refund of $25 to Alex.”** The built-in
 
 1. The model requests `issue_demo_refund` with its proposed input.
 2. The AI SDK emits an `approval-requested` tool part and pauses before `execute` runs.
-3. `ChatWidget` renders Approve and Deny controls. It submits the decision with `addToolApprovalResponse`.
+3. The default `ChatSurface` tool renderer shows Approve and Deny controls. It submits the decision with `addToolApprovalResponse`.
 4. The backend accepts only a decision matching its pending, signed approval request and keeps the authoritative tool input from server history.
 5. Approval executes the simulated tool; denial returns control to the model without executing it.
 
@@ -70,7 +154,7 @@ chat.addToolApprovalResponse({ id: part.approval.id, approved: true });
 // or: { id: part.approval.id, approved: false, reason: 'Denied by user' }
 ```
 
-The existing implementation is in `server/index.ts`; the approval card and client calls are in `src/chat/ChatWidget.tsx`. Keep tool execution and authorization on the server. In production, authenticate the user, authorize the specific action and authoritative input, persist pending approvals and operation IDs, and make consequential operations idempotent. The sample's signing key and conversation state are in memory, so pending approvals do not survive a restart.
+The existing implementation is in `server/index.ts`; the approval card and client calls are in `src/lib/ChatSurface.tsx`. Keep tool execution and authorization on the server. In production, authenticate the user, authorize the specific action and authoritative input, persist pending approvals and operation IDs, and make consequential operations idempotent. The sample's signing key and conversation state are in memory, so pending approvals do not survive a restart.
 
 ## Connect an external MCP server
 
@@ -88,17 +172,18 @@ This repository is an MCP client/App host; it does not include an MCP server. It
 
 | Concern | Source |
 | --- | --- |
-| Layout, copy, normal tool cards | `src/chat/ChatWidget.tsx` |
+| Controlled layout, copy, normal tool cards | `src/lib/ChatSurface.tsx` |
+| `useChat` convenience wrapper | `src/lib/ChatWidget.tsx` |
 | Inline app policy and AI SDK renderer | `src/chat/McpApp.tsx` |
-| Colors, responsive layout, app frame | `src/styles.css` |
-| Default React state and UI-message rendering | `src/chat/ChatWidget.tsx` |
+| Scoped library colors and responsive layout | `src/lib/styles.css` |
+| Example-only page and MCP App styles | `src/app.css` |
 | HTTP transport wiring | `src/main.tsx`, `src/embed-main.tsx` |
 | LLM/mock orchestration and browser API | `server/index.ts` |
 | MCP connection, discovery, grants, calls | `server/mcp.ts` |
 | Separate-origin sandbox and CSP | `server/sandbox-server.ts` |
 | Embed launcher and parent protocol | `src/embed/loader.ts`, `src/embed-main.tsx` |
 
-The default app uses `@ai-sdk/react` `useChat`, AI SDK `UIMessage`, and `DefaultChatTransport`. To connect another standard UI-message endpoint, pass a transport to `ChatWidget`; authentication headers belong in that transport:
+The default app uses `@ai-sdk/react` `useChat`, AI SDK `UIMessage`, and `DefaultChatTransport`. To connect another standard UI-message endpoint with the convenience wrapper, pass a transport to `ChatWidget`; authentication headers belong in that transport:
 
 ```ts
 const transport = new DefaultChatTransport({
@@ -107,7 +192,7 @@ const transport = new DefaultChatTransport({
 });
 ```
 
-The rendering code consumes standard UI-message text and tool parts rather than a starter-specific message model. That makes it source-compatible with other AI SDK-shaped state owners, but it is not a promise that different connection hooks are interchangeable. In particular, an application using persisted WebSockets, recovery, approvals, or browser-executed tools should retain its own hook/backend and adapt the source rendering boundary instead of adopting this sample HTTP server.
+`ChatSurface` consumes standard UI-message text and tool parts rather than a starter-specific message model. Applications using persisted WebSockets, recovery, approvals, optimistic state, or browser-executed tools should retain their own hook/backend and pass its state and actions to this controlled boundary instead of adopting the sample HTTP server.
 
 ## Browser/backend contracts
 

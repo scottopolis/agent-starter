@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-lib/
 .env
 .env.local
 .amp/portals/

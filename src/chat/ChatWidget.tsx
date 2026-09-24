@@ -1,10 +1,12 @@
 import { ArrowUp, MessageCircle, RotateCcw, Square, X } from 'lucide-react';
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, KeyboardEvent, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import type { ChatMessage, ChatTransport, ToolDisplay } from './types';
 import { useChat } from './use-chat';
+
+const McpApp = lazy(() => import('./McpApp'));
 
 export type ChatWidgetProps = Readonly<{
   transport: ChatTransport;
@@ -131,6 +133,13 @@ function Message({ message }: { message: ChatMessage }) {
 }
 
 function ToolCard({ tool }: { tool: ToolDisplay }) {
+  if (tool.app) {
+    return (
+      <Suspense fallback={<div className="mcp-app-loading" role="status">Loading interactive app…</div>}>
+        <McpApp tool={tool} />
+      </Suspense>
+    );
+  }
   return (
     <details className="tool-card">
       <summary><span className={`tool-status tool-status--${tool.status}`} /> {humanize(tool.name)} <small>{tool.status}</small></summary>

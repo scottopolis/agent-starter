@@ -81,5 +81,16 @@ function isToolDisplay(value: unknown): value is Extract<ChatStreamEvent, { type
   const tool = value as Record<string, unknown>;
   return typeof tool.id === 'string'
     && typeof tool.name === 'string'
-    && (tool.status === 'running' || tool.status === 'complete' || tool.status === 'error');
+    && (tool.status === 'running' || tool.status === 'complete' || tool.status === 'error')
+    && (tool.app === undefined || isMcpAppMetadata(tool.app));
+}
+
+function isMcpAppMetadata(value: unknown) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const app = value as Record<string, unknown>;
+  return Object.keys(app).length === 3
+    && typeof app.capabilityId === 'string'
+    && typeof app.resourceUri === 'string'
+    && app.resourceUri.startsWith('ui://')
+    && app.mimeType === 'text/html;profile=mcp-app';
 }

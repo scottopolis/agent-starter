@@ -15,16 +15,17 @@ export class HttpChatTransport implements ChatTransport {
   }
 
   async *stream({ messages, signal }: Parameters<ChatTransport['stream']>[0]) {
+    const headers = new Headers(await this.#getHeaders?.());
+    headers.set('content-type', 'application/json');
     const response = await fetch(this.#endpoint, {
       method: 'POST',
       signal,
       credentials: 'same-origin',
-      headers: {
-        'content-type': 'application/json',
-        ...(await this.#getHeaders?.()),
-      },
+      headers,
       body: JSON.stringify({
-        messages: messages.map(({ role, content }) => ({ role, content })),
+        messages: messages
+          .filter(({ content }) => content.trim().length > 0)
+          .map(({ role, content }) => ({ role, content })),
       }),
     });
 

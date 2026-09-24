@@ -19,6 +19,13 @@ Open:
 
 Without `OPENAI_API_KEY`, the backend streams deterministic mock responses. With a key, it uses the model in `OPENAI_MODEL` (default: `gpt-4o-mini`). The browser never receives the provider key.
 
+`server/index.ts` loads `.env` with `dotenv` in development and in the compiled server. To run the production build locally:
+
+```bash
+npm run build
+npm run start:server
+```
+
 ## Customize the source
 
 | Concern | Source |

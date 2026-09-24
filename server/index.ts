@@ -1,13 +1,20 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { streamText, type ModelMessage } from 'ai';
+import { config } from 'dotenv';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+
+config({ quiet: true });
 
 const port = Number.parseInt(process.env.API_PORT || '8787', 10);
 const maxBodyBytes = 256_000;
 
 const server = createServer(async (request, response) => {
   if (request.method === 'GET' && request.url === '/api/health') {
-    json(response, 200, { ok: true, mode: process.env.OPENAI_API_KEY ? 'openai' : 'mock' });
+    json(response, 200, {
+      ok: true,
+      mode: process.env.OPENAI_API_KEY ? 'openai' : 'mock',
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    });
     return;
   }
   if (request.method !== 'POST' || request.url !== '/api/chat') {
@@ -15,6 +22,10 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  const disconnect = new AbortController();
+  const abort = () => disconnect.abort();
+  request.once('aborted', abort);
+  response.once('close', abort);
   try {
     const body = await readJson(request);
     const messages = parseMessages(body);
@@ -23,15 +34,19 @@ const server = createServer(async (request, response) => {
       'cache-control': 'no-cache, no-transform',
       'x-content-type-options': 'nosniff',
     });
-    if (process.env.OPENAI_API_KEY) await streamOpenAI(messages, response);
+    if (process.env.OPENAI_API_KEY) await streamOpenAI(messages, response, disconnect.signal);
     else await streamMock(messages, response);
   } catch (error) {
+    if (disconnect.signal.aborted || response.destroyed) return;
     if (response.headersSent) {
       response.destroy(error instanceof Error ? error : undefined);
       return;
     }
     const message = error instanceof RequestError ? error.message : 'The chat request could not be completed';
     json(response, error instanceof RequestError ? error.status : 500, { error: message });
+  } finally {
+    request.removeListener('aborted', abort);
+    response.removeListener('close', abort);
   }
 });
 
@@ -39,12 +54,13 @@ server.listen(port, '0.0.0.0', () => {
   console.log(`Chat API listening on http://0.0.0.0:${port} (${process.env.OPENAI_API_KEY ? 'OpenAI' : 'mock'} mode)`);
 });
 
-async function streamOpenAI(messages: ModelMessage[], response: ServerResponse) {
+async function streamOpenAI(messages: ModelMessage[], response: ServerResponse, abortSignal: AbortSignal) {
   const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const result = streamText({
     model: openai(process.env.OPENAI_MODEL || 'gpt-4o-mini'),
     system: 'You are a concise, friendly product assistant. Use Markdown when it improves readability.',
     messages,
+    abortSignal,
   });
   for await (const text of result.textStream) writeEvent(response, { type: 'text-delta', text });
   response.end();

@@ -42,7 +42,7 @@ export function ChatWidget({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!draft.trim()) return;
+    if (chat.status === 'streaming' || !draft.trim()) return;
     chat.send(draft);
     setDraft('');
   }

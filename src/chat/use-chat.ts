@@ -7,6 +7,8 @@ export function useChat(transport: ChatTransport, initialMessages: readonly Chat
   const [status, setStatus] = useState<'idle' | 'streaming'>('idle');
   const [error, setError] = useState<string>();
   const abortRef = useRef<AbortController | undefined>(undefined);
+  const busyRef = useRef(false);
+  const generationRef = useRef(0);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
@@ -14,52 +16,66 @@ export function useChat(transport: ChatTransport, initialMessages: readonly Chat
 
   const run = useCallback(async (history: ChatMessage[]) => {
     const controller = new AbortController();
+    const generation = ++generationRef.current;
     abortRef.current = controller;
+    busyRef.current = true;
     setStatus('streaming');
     setError(undefined);
     const assistantId = crypto.randomUUID();
     setMessages([...history, { id: assistantId, role: 'assistant', content: '', tools: [] }]);
     try {
       for await (const event of transport.stream({ messages: history, signal: controller.signal })) {
+        if (abortRef.current !== controller) continue;
         setMessages((current) => current.map((message) => {
+          if (generationRef.current !== generation) return message;
           if (message.id !== assistantId) return message;
           if (event.type === 'text-delta') return { ...message, content: message.content + event.text };
           return { ...message, tools: upsertTool(message.tools ?? [], event.tool) };
         }));
       }
     } catch (cause) {
-      if (!controller.signal.aborted) {
+      if (abortRef.current === controller && !controller.signal.aborted) {
         setError(cause instanceof Error ? cause.message : 'The response could not be completed');
       }
     } finally {
-      if (abortRef.current === controller) abortRef.current = undefined;
-      setStatus('idle');
+      if (abortRef.current === controller) {
+        abortRef.current = undefined;
+        busyRef.current = false;
+        setMessages((current) => current.filter(isRenderableMessage));
+        setStatus('idle');
+      }
     }
   }, [transport]);
 
   const send = useCallback((text: string) => {
-    if (status === 'streaming' || !text.trim()) return;
-    const next = [...messagesRef.current, {
+    if (busyRef.current || !text.trim()) return;
+    busyRef.current = true;
+    const next = [...messagesRef.current.filter(isRenderableMessage), {
       id: crypto.randomUUID(),
       role: 'user' as const,
       content: text.trim(),
     }];
     setMessages(next);
     void run(next);
-  }, [run, status]);
+  }, [run]);
 
   const retry = useCallback(() => {
-    if (status === 'streaming') return;
+    if (busyRef.current) return;
     let lastUserIndex = messagesRef.current.length - 1;
     while (lastUserIndex >= 0 && messagesRef.current[lastUserIndex]?.role !== 'user') lastUserIndex -= 1;
     if (lastUserIndex < 0) return;
+    busyRef.current = true;
     const history = messagesRef.current.slice(0, lastUserIndex + 1);
     setMessages(history);
     void run(history);
-  }, [run, status]);
+  }, [run]);
 
   const reset = useCallback(() => {
-    abortRef.current?.abort();
+    const active = abortRef.current;
+    abortRef.current = undefined;
+    busyRef.current = false;
+    generationRef.current += 1;
+    active?.abort();
     setMessages([...initialMessages]);
     setError(undefined);
     setStatus('idle');
@@ -80,4 +96,8 @@ function upsertTool(tools: readonly ToolDisplay[], next: ToolDisplay): ToolDispl
   const index = tools.findIndex((tool) => tool.id === next.id);
   if (index < 0) return [...tools, next];
   return tools.map((tool, toolIndex) => toolIndex === index ? next : tool);
+}
+
+function isRenderableMessage(message: ChatMessage): boolean {
+  return message.role === 'user' || message.content.trim().length > 0 || (message.tools?.length ?? 0) > 0;
 }

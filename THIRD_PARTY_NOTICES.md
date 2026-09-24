@@ -7,6 +7,7 @@ Runtime dependencies are installed from npm and are not vendored here. They reta
 - React and React DOM — MIT
 - Vite and `@vitejs/plugin-react` — MIT
 - Vercel AI SDK and the OpenAI provider package — Apache-2.0
+- dotenv — BSD-2-Clause
 - React Markdown and remark-gfm — MIT
 - Lucide React — ISC
 - Fontsource DM Sans and Manrope packages — OFL-1.1

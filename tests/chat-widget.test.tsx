@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { ChatWidget } from '../src/chat/ChatWidget';
@@ -41,6 +41,102 @@ describe('ChatWidget', () => {
     expect(await screen.findByRole('button', { name: 'Send message' })).toBeDisabled();
   });
 
+  it('removes an empty stopped response before sending the next message', async () => {
+    const requests: string[][] = [];
+    let calls = 0;
+    const transport: ChatTransport = {
+      async *stream({ messages, signal }) {
+        requests.push(messages.map((message) => message.content));
+        calls += 1;
+        if (calls === 1) {
+          await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+          return;
+        }
+        yield { type: 'text-delta', text: 'Second response' };
+      },
+    };
+    render(<ChatWidget transport={transport} />);
+    await userEvent.type(screen.getByLabelText('Message'), 'First{enter}');
+    await userEvent.click(await screen.findByRole('button', { name: 'Stop response' }));
+    await screen.findByRole('button', { name: 'Send message' });
+    await userEvent.type(screen.getByLabelText('Message'), 'Second{enter}');
+    expect(await screen.findByText('Second response')).toBeInTheDocument();
+    expect(requests).toEqual([['First'], ['First', 'Second']]);
+  });
+
+  it('keeps a draft when Enter is pressed while streaming', async () => {
+    const transport: ChatTransport = {
+      async *stream({ signal }) {
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+      },
+    };
+    render(<ChatWidget transport={transport} />);
+    const composer = screen.getByLabelText('Message');
+    await userEvent.type(composer, 'Active{enter}');
+    await screen.findByRole('button', { name: 'Stop response' });
+    await userEvent.type(composer, 'Keep this{enter}');
+    expect(composer).toHaveValue('Keep this');
+  });
+
+  it('accepts only one synchronous form submission', async () => {
+    let calls = 0;
+    const transport: ChatTransport = {
+      async *stream({ signal }) {
+        calls += 1;
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+      },
+    };
+    const { container } = render(<ChatWidget transport={transport} />);
+    await userEvent.type(screen.getByLabelText('Message'), 'Only once');
+    const form = container.querySelector('form')!;
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    expect(calls).toBe(1);
+  });
+
+  it('preserves a tool-only assistant message', async () => {
+    const transport = sequence([{
+      type: 'tool',
+      tool: { id: 'tool-1', name: 'account_lookup', status: 'complete', output: { found: true } },
+    }]);
+    render(<ChatWidget transport={transport} />);
+    await userEvent.type(screen.getByLabelText('Message'), 'Find it{enter}');
+    expect(await screen.findByText('Account Lookup')).toBeInTheDocument();
+  });
+
+  it('ignores an old stream settling after reset while a new stream is active', async () => {
+    const oldStream = deferred();
+    const newStream = deferred();
+    let calls = 0;
+    const transport: ChatTransport = {
+      async *stream() {
+        calls += 1;
+        if (calls === 1) {
+          await oldStream.promise;
+          yield { type: 'text-delta', text: 'Stale response' };
+          return;
+        }
+        await newStream.promise;
+        yield { type: 'text-delta', text: 'Fresh response' };
+      },
+    };
+    render(<ChatWidget transport={transport} />);
+    await userEvent.type(screen.getByLabelText('Message'), 'Old{enter}');
+    await userEvent.click(await screen.findByRole('button', { name: 'Start a new chat' }));
+    await userEvent.type(screen.getByLabelText('Message'), 'New{enter}');
+    await act(() => {
+      oldStream.resolve();
+      return oldStream.promise;
+    });
+    expect(screen.queryByText('Stale response')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop response' })).toBeInTheDocument();
+    await act(() => {
+      newStream.resolve();
+      return newStream.promise;
+    });
+    expect(await screen.findByText('Fresh response')).toBeInTheDocument();
+  });
+
   it('shows an error and retries the same conversation', async () => {
     let attempts = 0;
     const transport: ChatTransport = {
@@ -66,4 +162,10 @@ function sequence(events: ChatStreamEvent[]): ChatTransport {
       for (const event of events) yield event;
     },
   };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
 }

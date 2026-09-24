@@ -77,13 +77,24 @@
 .agent-chat .assistant-stack { min-width: 0; max-width: min(82%, 560px); }
 .agent-chat .message-bubble { width: fit-content; max-width: min(82%, 560px); padding: 12px 15px; border-radius: 6px 18px 18px 18px; font-size: 14px; line-height: 1.58; overflow-wrap: anywhere; }
 .agent-chat .message-bubble p { margin: 0; }
+.agent-chat .message-bubble--user p, .agent-chat .welcome .message-bubble p { white-space: pre-wrap; }
 .agent-chat .message-bubble--assistant { color: #26312e; background: #f0f3f1; }
 .agent-chat .assistant-stack .message-bubble { max-width: 100%; }
 .agent-chat .message-bubble--user { border-radius: 18px 18px 6px 18px; color: #fff; background: var(--agent-chat-accent); }
 .agent-chat .markdown > :first-child { margin-top: 0; }
 .agent-chat .markdown > :last-child { margin-bottom: 0; }
 .agent-chat .markdown p, .agent-chat .markdown ul, .agent-chat .markdown ol, .agent-chat .markdown pre, .agent-chat .markdown blockquote, .agent-chat .markdown table { margin-block: .7em; }
-.agent-chat .markdown ul, .agent-chat .markdown ol { padding-left: 1.35rem; }
+.agent-chat .markdown h1 { margin-block: .67em; font-size: 2em; font-weight: 700; }
+.agent-chat .markdown h2 { margin-block: .83em; font-size: 1.5em; font-weight: 700; }
+.agent-chat .markdown h3 { margin-block: 1em; font-size: 1.17em; font-weight: 700; }
+.agent-chat .markdown h4 { margin-block: 1.33em; font-size: 1em; font-weight: 700; }
+.agent-chat .markdown h5 { margin-block: 1.67em; font-size: .83em; font-weight: 700; }
+.agent-chat .markdown h6 { margin-block: 2.33em; font-size: .67em; font-weight: 700; }
+.agent-chat .markdown ul, .agent-chat .markdown ol { padding-left: 1.35rem; list-style-position: outside; }
+.agent-chat .markdown ul { list-style-type: disc; }
+.agent-chat .markdown ul ul { list-style-type: circle; }
+.agent-chat .markdown ul ul ul { list-style-type: square; }
+.agent-chat .markdown ol { list-style-type: decimal; }
 .agent-chat .markdown a { color: #14644f; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .agent-chat .markdown code { padding: .12em .3em; border-radius: 5px; background: #dfe6e3; font: .88em ui-monospace, monospace; }
 .agent-chat .markdown pre { max-width: 100%; overflow: auto; padding: 12px; border-radius: 10px; background: #17211e; color: #eef5f2; }

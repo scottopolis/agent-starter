@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
+import { createRef } from 'react';
 
 import { ChatSurface, ChatWidget } from '../src/lib';
 
@@ -155,6 +156,34 @@ describe('ChatWidget', () => {
     expect(composers[0].id).not.toBe(composers[1].id);
     expect(labels[0]).toHaveAttribute('for', composers[0].id);
     expect(labels[1]).toHaveAttribute('for', composers[1].id);
+  });
+
+  it('targets each mounted composer through its own ref and stable data attribute', () => {
+    const surfaceComposerRef = createRef<HTMLTextAreaElement>();
+    const widgetComposerRef = createRef<HTMLTextAreaElement>();
+    render(
+      <>
+        <ChatSurface messages={[]} status="ready" actions={surfaceActions()} composerRef={surfaceComposerRef} />
+        <ChatWidget transport={sequence(() => textChunks('unused'))} composerRef={widgetComposerRef} />
+      </>,
+    );
+    const composers = document.querySelectorAll<HTMLTextAreaElement>('[data-agent-chat-composer]');
+    expect(composers).toHaveLength(2);
+    expect(surfaceComposerRef.current).toBe(composers[0]);
+    expect(widgetComposerRef.current).toBe(composers[1]);
+    surfaceComposerRef.current?.focus();
+    expect(document.activeElement).toBe(surfaceComposerRef.current);
+    expect(document.activeElement).not.toBe(widgetComposerRef.current);
+  });
+
+  it('does not add a nested main landmark when mounted in an application main', () => {
+    render(
+      <main aria-label="Application content">
+        <ChatSurface messages={[]} status="ready" actions={surfaceActions()} title="Support chat" />
+      </main>,
+    );
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    expect(screen.getByRole('region', { name: 'Support chat' })).toBeInTheDocument();
   });
 
   it('shows progress after a submitted user message unless host status content replaces it', () => {

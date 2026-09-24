@@ -40,6 +40,8 @@ import '@scottopolis/agent-widget/styles.css';
 
 `renderTool` is authoritative when supplied: `null` suppresses a tool without rendering its name, input, result, or the default fallback. `actions` accepts `sendMessage({ text })`, `stop()`, `regenerate()`, `addToolApprovalResponse(response)`, and optional `setMessages(update)` for removing an empty assistant turn after stop. User content is rendered as literal React text; only assistant text is parsed as Markdown with raw HTML disabled.
 
+Pass `composerRef` to focus or measure a specific mounted composer. Each textarea also has the stable `data-agent-chat-composer` attribute for delegated host events; prefer the ref when targeting one of multiple widgets.
+
 For a conventional AI SDK HTTP transport, `ChatWidget` owns `useChat` and accepts all presentation props above:
 
 ```tsx

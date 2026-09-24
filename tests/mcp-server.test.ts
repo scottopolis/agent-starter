@@ -153,6 +153,26 @@ describe('MCP sandbox security', () => {
     }
   });
 
+  it('allows a same-origin embed ancestor without the extra allowlist', async () => {
+    const sandbox = createSandboxServer(new Set(['https://widget.example']), new Set());
+    await listen(sandbox);
+    try {
+      const base = serverOrigin(sandbox);
+      const sameOrigin = await fetch(`${base}/sandbox?hostOrigin=${encodeURIComponent('https://widget.example')}&embedAncestorOrigin=${encodeURIComponent('https://widget.example')}`, {
+        headers: { referer: 'https://widget.example/embed.html' },
+      });
+      expect(sameOrigin.status).toBe(200);
+      expect(sameOrigin.headers.get('content-security-policy')).toContain('frame-ancestors https://widget.example');
+
+      const differentOrigin = await fetch(`${base}/sandbox?hostOrigin=${encodeURIComponent('https://widget.example')}&embedAncestorOrigin=${encodeURIComponent('https://website.example')}`, {
+        headers: { referer: 'https://widget.example/embed.html' },
+      });
+      expect(differentOrigin.status).toBe(403);
+    } finally {
+      await close(sandbox);
+    }
+  });
+
   it('loads a non-default sandbox port and host origin from .env', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'agent-starter-sandbox-'));
     const port = await availablePort();

@@ -21,7 +21,7 @@ export function createSandboxServer(
       const referrerOrigin = originFromReferrer(request.headers.referer);
       if (!hostOrigin || !allowedOrigins.has(hostOrigin) || referrerOrigin !== hostOrigin) return plain(response, 403, 'Forbidden');
       const embedAncestorOrigin = optionalOrigin(requestUrl.searchParams.get('embedAncestorOrigin'));
-      if (embedAncestorOrigin && !allowedEmbedAncestors.has(embedAncestorOrigin)) return plain(response, 403, 'Forbidden');
+      if (embedAncestorOrigin && embedAncestorOrigin !== hostOrigin && !allowedEmbedAncestors.has(embedAncestorOrigin)) return plain(response, 403, 'Forbidden');
       const csp = parseCspParam(requestUrl.searchParams.get('csp'));
       const permissions = parsePermissionsParam(requestUrl.searchParams.get('permissions'));
       const script = sandboxScript(hostOrigin, csp, permissions);

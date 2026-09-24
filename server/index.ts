@@ -80,7 +80,6 @@ async function streamOpenAI(
   abortSignal: AbortSignal,
 ) {
   const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const byName = new Map(discovered.map((item) => [item.modelName, item]));
   const tools: ToolSet = Object.fromEntries(discovered.map((item) => [item.modelName, tool({
     description: item.description,
     inputSchema: jsonSchema(item.inputSchema),

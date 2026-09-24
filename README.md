@@ -68,7 +68,7 @@ The repository does not commit generated library output. Its `prepare` script bu
 
 ### Styling and extension boundaries
 
-All library selectors are under `.agent-chat`; the stylesheet has no `:root`, `html`, `body`, global font, or global control rules. Override custom properties on the component or an ancestor:
+All library selectors are under `.agent-chat`; the stylesheet has no `:root`, `html`, `body`, global font, or global control rules. Override custom properties on the component root using its `className` or `style` prop:
 
 ```css
 .my-assistant {

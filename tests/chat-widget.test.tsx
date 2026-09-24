@@ -82,6 +82,47 @@ describe('ChatWidget', () => {
     expect(await screen.findByText('Account Lookup')).toBeInTheDocument();
   });
 
+  it('shows a tool approval request and sends the decision before continuing', async () => {
+    const requests: UIMessage[][] = [];
+    let calls = 0;
+    const transport = sequence(({ messages }) => {
+      requests.push(messages);
+      calls += 1;
+      if (calls === 1) return [
+        { type: 'start', messageId: 'assistant-approval' },
+        {
+          type: 'tool-input-available', toolCallId: 'refund-1', toolName: 'issue_demo_refund',
+          input: { amount: 25, recipient: 'Alex' }, dynamic: true,
+        },
+        {
+          type: 'tool-approval-request', toolCallId: 'refund-1', approvalId: 'approval-1',
+          reason: 'Issuing a refund requires approval.',
+        },
+        { type: 'finish', finishReason: 'tool-calls' },
+      ];
+      return [
+        { type: 'start', messageId: 'assistant-approval' },
+        { type: 'tool-output-available', toolCallId: 'refund-1', output: { status: 'simulated' } },
+        { type: 'text-start', id: 'text-approval' },
+        { type: 'text-delta', id: 'text-approval', delta: 'Refund completed' },
+        { type: 'text-end', id: 'text-approval' },
+        { type: 'finish', finishReason: 'stop' },
+      ];
+    });
+    render(<ChatWidget transport={transport} />);
+    await userEvent.type(screen.getByLabelText('Message'), 'Refund Alex $25{enter}');
+    expect(await screen.findByRole('region', { name: 'Issue Demo Refund approval' })).toHaveTextContent('Issuing a refund requires approval.');
+    expect(screen.getByText(/"amount": 25/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(calls).toBe(2));
+    const responsePart = requests[1].at(-1)?.parts.find((part) => isApprovalPart(part));
+    expect(responsePart).toMatchObject({
+      state: 'approval-responded',
+      approval: { id: 'approval-1', approved: true },
+    });
+    expect(await screen.findByText('Refund completed')).toBeInTheDocument();
+  });
+
   it('ignores an old stream settling after reset while a new stream is active', async () => {
     const oldStream = deferred<UIMessageChunk[]>();
     const newStream = deferred<UIMessageChunk[]>();
@@ -181,6 +222,10 @@ function chunkStream(chunks: UIMessageChunk[]) {
 
 function messageText(message: UIMessage) {
   return message.parts.filter(part => part.type === 'text').map(part => part.text).join('');
+}
+
+function isApprovalPart(part: UIMessage['parts'][number]) {
+  return 'state' in part && part.state === 'approval-responded';
 }
 
 function deferred<T>() {

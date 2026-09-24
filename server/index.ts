@@ -1,5 +1,6 @@
 import { createOpenAI } from '@ai-sdk/openai';
-import { jsonSchema, stepCountIs, streamText, tool, type ModelMessage, type ToolSet } from 'ai';
+import { jsonSchema, stepCountIs, streamText, tool, type JSONValue, type ModelMessage, type ToolSet } from 'ai';
+import type { CallToolResult } from '@modelcontextprotocol/client';
 import { config } from 'dotenv';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
@@ -84,6 +85,7 @@ async function streamOpenAI(
     description: item.description,
     inputSchema: jsonSchema(item.inputSchema),
     execute: (input, { abortSignal: toolSignal }) => mcp.callModelTool(item, input, toolSignal),
+    toModelOutput: ({ output }) => toModelToolOutput(output as CallToolResult),
   })]));
   const result = streamText({
     model: openai(process.env.OPENAI_MODEL || 'gpt-4o-mini'),
@@ -93,20 +95,42 @@ async function streamOpenAI(
     stopWhen: stepCountIs(5),
     abortSignal,
   });
-  for await (const part of result.fullStream) {
-    if (part.type === 'text-delta') writeEvent(response, { type: 'text-delta', text: part.text });
+  await forwardModelStream(result.fullStream, discovered, (event) => writeEvent(response, event));
+  response.end();
+}
+
+export async function forwardModelStream(
+  fullStream: AsyncIterable<any>,
+  discovered: readonly DiscoveredTool[],
+  write: (event: unknown) => void,
+) {
+  const byName = new Map(discovered.map((item) => [item.modelName, item]));
+  for await (const part of fullStream) {
+    if (part.type === 'text-delta') write({ type: 'text-delta', text: part.text });
     else if (part.type === 'tool-call') {
       const definition = byName.get(part.toolName);
-      writeEvent(response, { type: 'tool', tool: toolDisplay(part.toolCallId, part.toolName, 'running', part.input, undefined, definition) });
+      write({ type: 'tool', tool: toolDisplay(part.toolCallId, part.toolName, 'running', part.input, undefined, definition) });
     } else if (part.type === 'tool-result') {
       const definition = byName.get(part.toolName);
-      writeEvent(response, { type: 'tool', tool: toolDisplay(part.toolCallId, part.toolName, 'complete', part.input, part.output, definition) });
+      write({ type: 'tool', tool: toolDisplay(part.toolCallId, part.toolName, 'complete', part.input, part.output, definition) });
     } else if (part.type === 'tool-error') {
       const definition = byName.get(part.toolName);
-      writeEvent(response, { type: 'tool', tool: toolDisplay(part.toolCallId, part.toolName, 'error', part.input, { message: safeError(part.error) }, definition) });
+      write({ type: 'tool', tool: toolDisplay(part.toolCallId, part.toolName, 'error', part.input, { message: safeError(part.error) }, definition) });
+    } else if (part.type === 'error') {
+      throw part.error instanceof Error ? part.error : new Error(safeError(part.error));
     }
   }
-  response.end();
+}
+
+export function toModelToolOutput(result: CallToolResult) {
+  const value = JSON.parse(JSON.stringify({
+    content: result.content,
+    ...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }),
+  })) as JSONValue;
+  return {
+    type: 'json' as const,
+    value,
+  };
 }
 
 async function streamMock(

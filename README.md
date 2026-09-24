@@ -99,9 +99,12 @@ widget origin → trusted sandbox proxy origin → opaque-origin MCP App iframe
 ```dotenv
 VITE_MCP_SANDBOX_URL=https://mcp-sandbox.example.com/sandbox
 MCP_HOST_ORIGINS=https://chat.example.com
+MCP_EMBED_ANCESTOR_ORIGINS=https://www.example.com,https://portal.example.com
 ```
 
-`VITE_MCP_SANDBOX_URL` is a frontend build setting. `MCP_HOST_ORIGINS` is a comma-separated exact allowlist enforced by the sandbox service. The service also requires a matching request referrer, emits restrictive response headers, validates structured CSP origins, and denies undeclared network/frame/base access. It never inserts raw CSP directives. Host and proxy validate exact `postMessage` window sources and origins; the proxy accepts the inner app only from its opaque (`null`) origin.
+`VITE_MCP_SANDBOX_URL` is a frontend build setting. `MCP_HOST_ORIGINS` is a comma-separated exact allowlist of widget origins enforced by the sandbox service. `MCP_EMBED_ANCESTOR_ORIGINS` is the non-wildcard allowlist of website origins that may contain the embedded widget. CSP checks the sandbox's complete frame tree, so explicitly list every website origin that can be an ancestor; omit this setting for standalone-only use. The embed passes its validated parent origin to the sandbox, which rejects it unless configured and emits the configured origins in `frame-ancestors` alongside the widget origin.
+
+Both `dev:sandbox` and `start:sandbox` load these values and `MCP_SANDBOX_PORT` from `.env`. The service also requires a matching widget request referrer, emits restrictive response headers, validates structured CSP origins, and denies undeclared network/frame/base access. It never inserts raw CSP directives. Host and proxy validate exact `postMessage` window sources and origins; the proxy accepts the inner app only from its opaque (`null`) origin.
 
 The official `@modelcontextprotocol/ext-apps` `AppBridge` handles the Apps protocol. The host forwards complete tool input/results, app-only calls, safe absolute HTTP(S) open-link requests, bounded height changes, initialization timeouts, and graceful teardown. Failures retain a non-interactive tool-result fallback.
 

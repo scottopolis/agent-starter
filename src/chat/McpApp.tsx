@@ -20,16 +20,18 @@ type McpUiCsp = Partial<Record<'connectDomains' | 'resourceDomains' | 'frameDoma
 type McpUiPermissions = Partial<Record<'camera' | 'microphone' | 'geolocation' | 'clipboardWrite', Record<string, never>>>;
 type ActiveBridge = { bridge: AppBridge; initialized: boolean; inputKey?: string; resultKey?: string };
 
-export default function McpApp({ tool }: { tool: ToolDisplay }) {
+export default function McpApp({ tool, embedAncestorOrigin }: { tool: ToolDisplay; embedAncestorOrigin?: string }) {
   const capabilityId = tool.app!.capabilityId;
+  const latestToolRef = useRef(tool);
+  latestToolRef.current = tool;
   const [resource, setResource] = useState<ResourceEnvelope>();
   const [failed, setFailed] = useState(false);
   const [height, setHeight] = useState(INITIAL_HEIGHT);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const activeRef = useRef<ActiveBridge | undefined>(undefined);
   const sandboxUrl = useMemo(() => {
-    try { return resource && makeSandboxUrl(resource); } catch { return undefined; }
-  }, [resource]);
+    try { return resource && makeSandboxUrl(resource, embedAncestorOrigin); } catch { return undefined; }
+  }, [embedAncestorOrigin, resource]);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,7 +74,7 @@ export default function McpApp({ tool }: { tool: ToolDisplay }) {
       initialized = true;
       window.clearTimeout(timeout);
       if (activeRef.current) activeRef.current.initialized = true;
-      void syncTool(activeRef.current, tool).catch(() => setFailed(true));
+      void syncTool(activeRef.current, latestToolRef.current).catch(() => setFailed(true));
     });
     bridge.addEventListener('sizechange', ({ height: requestedHeight }) => {
       if (typeof requestedHeight === 'number' && Number.isFinite(requestedHeight)) {
@@ -148,12 +150,13 @@ async function syncTool(active: ActiveBridge | undefined, tool: ToolDisplay) {
   }
 }
 
-function makeSandboxUrl(resource: ResourceEnvelope) {
+function makeSandboxUrl(resource: ResourceEnvelope, embedAncestorOrigin?: string) {
   const configured = import.meta.env.VITE_MCP_SANDBOX_URL || 'http://localhost:8789/sandbox';
   const url = new URL(configured, window.location.href);
   if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin === window.location.origin) throw new Error('MCP_SANDBOX_URL must use a distinct HTTP(S) origin');
   url.search = '';
   url.searchParams.set('hostOrigin', window.location.origin);
+  if (embedAncestorOrigin) url.searchParams.set('embedAncestorOrigin', embedAncestorOrigin);
   if (resource.csp) url.searchParams.set('csp', JSON.stringify(resource.csp));
   if (resource.permissions) url.searchParams.set('permissions', JSON.stringify(resource.permissions));
   return url.href;

@@ -41,6 +41,7 @@ function EmbeddedApp() {
   return (
     <ChatWidget
       embedded
+      embedAncestorOrigin={config.parentOrigin}
       title={config.title}
       transport={transport}
       requestedPrompt={prompt}

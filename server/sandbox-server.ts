@@ -1,11 +1,17 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { config } from 'dotenv';
+import { createServer, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
 
 import type { McpUiCsp, McpUiPermissions } from './mcp.js';
 
+config({ quiet: true });
+
 const MAX_QUERY_BYTES = 8_192;
 
-export function createSandboxServer(allowedOrigins = parseAllowedOrigins(process.env.MCP_HOST_ORIGINS)) {
+export function createSandboxServer(
+  allowedOrigins = parseAllowedOrigins(process.env.MCP_HOST_ORIGINS),
+  allowedEmbedAncestors = parseAllowedOrigins(process.env.MCP_EMBED_ANCESTOR_ORIGINS, []),
+) {
   return createServer((request, response) => {
     try {
       const requestUrl = new URL(request.url || '/', 'http://sandbox.invalid');
@@ -14,10 +20,13 @@ export function createSandboxServer(allowedOrigins = parseAllowedOrigins(process
       const hostOrigin = exactOrigin(requestUrl.searchParams.get('hostOrigin'));
       const referrerOrigin = originFromReferrer(request.headers.referer);
       if (!hostOrigin || !allowedOrigins.has(hostOrigin) || referrerOrigin !== hostOrigin) return plain(response, 403, 'Forbidden');
+      const embedAncestorOrigin = optionalOrigin(requestUrl.searchParams.get('embedAncestorOrigin'));
+      if (embedAncestorOrigin && !allowedEmbedAncestors.has(embedAncestorOrigin)) return plain(response, 403, 'Forbidden');
       const csp = parseCspParam(requestUrl.searchParams.get('csp'));
       const permissions = parsePermissionsParam(requestUrl.searchParams.get('permissions'));
       const script = sandboxScript(hostOrigin, csp, permissions);
-      response.writeHead(200, sandboxHeaders(hostOrigin, csp, permissions));
+      const embedAncestors = embedAncestorOrigin ? [...allowedEmbedAncestors] : [];
+      response.writeHead(200, sandboxHeaders(hostOrigin, csp, permissions, embedAncestors));
       response.end(`<!doctype html><html><head><meta charset="utf-8"><title>MCP App sandbox</title><style>html,body{margin:0;width:100%;height:100%;background:transparent}iframe{display:block;width:100%;height:100%;border:0}</style></head><body><script>${script}</script></body></html>`);
     } catch {
       plain(response, 400, 'Invalid sandbox request');
@@ -25,11 +34,11 @@ export function createSandboxServer(allowedOrigins = parseAllowedOrigins(process
   });
 }
 
-export function sandboxHeaders(hostOrigin: string, csp?: McpUiCsp, permissions?: McpUiPermissions) {
+export function sandboxHeaders(hostOrigin: string, csp?: McpUiCsp, permissions?: McpUiPermissions, embedAncestorOrigins: readonly string[] = []) {
   return {
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'no-store',
-    'content-security-policy': buildCsp(hostOrigin, csp),
+    'content-security-policy': buildCsp(hostOrigin, csp, embedAncestorOrigins),
     'permissions-policy': buildPermissionsPolicy(permissions),
     'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
@@ -37,7 +46,7 @@ export function sandboxHeaders(hostOrigin: string, csp?: McpUiCsp, permissions?:
   };
 }
 
-export function buildCsp(hostOrigin: string, csp?: McpUiCsp) {
+export function buildCsp(hostOrigin: string, csp?: McpUiCsp, embedAncestorOrigins: readonly string[] = []) {
   const resources = sanitizeDomains(csp?.resourceDomains, false);
   const connections = sanitizeDomains(csp?.connectDomains, true);
   const frames = sanitizeDomains(csp?.frameDomains, false);
@@ -54,7 +63,7 @@ export function buildCsp(hostOrigin: string, csp?: McpUiCsp) {
     `base-uri ${bases.length ? bases.join(' ') : "'none'"}`,
     "object-src 'none'",
     "form-action 'none'",
-    `frame-ancestors ${hostOrigin}`,
+    `frame-ancestors ${[hostOrigin, ...embedAncestorOrigins].join(' ')}`,
   ].join('; ');
 }
 
@@ -146,13 +155,20 @@ function buildPermissionsPolicy(permissions?: McpUiPermissions) {
   ].join(', ');
 }
 
-function parseAllowedOrigins(raw?: string) {
-  const values = raw?.split(',').map((value) => value.trim()).filter(Boolean) ?? ['http://localhost:5173'];
+function parseAllowedOrigins(raw?: string, defaults = ['http://localhost:5173']) {
+  const values = raw?.split(',').map((value) => value.trim()).filter(Boolean) ?? defaults;
   return new Set(values.map((value) => {
     const origin = exactOrigin(value);
     if (!origin) throw new Error(`Invalid MCP host origin: ${value}`);
     return origin;
   }));
+}
+
+function optionalOrigin(value: string | null) {
+  if (value === null) return undefined;
+  const origin = exactOrigin(value);
+  if (!origin) throw new Error('Invalid embed ancestor origin');
+  return origin;
 }
 
 function exactOrigin(value: string | null) {

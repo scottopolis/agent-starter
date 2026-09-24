@@ -1,5 +1,5 @@
 import { Client, StreamableHTTPClientTransport, type CallToolResult, type Tool } from '@modelcontextprotocol/client';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 export const MCP_APP_MIME_TYPE = 'text/html;profile=mcp-app';
 
@@ -82,7 +82,7 @@ export class McpRegistry {
           .map((candidate) => candidate.name));
         const app = resourceUri ? this.#grant(server, tool.name, resourceUri, appTools) : undefined;
         return [{
-          modelName: `${safeName(server.config.id)}__${safeName(tool.name)}`,
+          modelName: modelToolName(server.config.id, tool.name),
           serverId: server.config.id,
           remoteName: tool.name,
           description: tool.description,
@@ -171,6 +171,7 @@ export class McpRegistry {
         requestInit: { headers: config.headers },
       });
       await client.connect(transport);
+      // The 2.x client aggregates every page when listTools is called without a cursor.
       const { tools } = await client.listTools();
       return { config, client, tools };
     })();
@@ -264,8 +265,14 @@ function textResult(result: CallToolResult) {
   return result.content.filter((item) => item.type === 'text').map((item) => item.text).join('\n');
 }
 
+export function modelToolName(serverId: string, toolName: string) {
+  const readable = `${safeName(serverId)}__${safeName(toolName)}`.slice(0, 51);
+  const digest = createHash('sha256').update(serverId).update('\0').update(toolName).digest('base64url').slice(0, 12);
+  return `${readable}_${digest}`;
+}
+
 function safeName(value: string) {
-  return value.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  return value.replace(/[^a-zA-Z0-9_-]/g, '_') || '_';
 }
 
 function decodeBase64(value: string) {

@@ -1,6 +1,6 @@
 # Agent Widget
 
-A reusable, provider-neutral React chat surface for standard AI SDK UI messages, plus a thin working example. It includes a controlled component for applications that own chat state, a `useChat` convenience wrapper, scoped themeable CSS, and explicit rendering seams for tools, errors, status, and host controls.
+A reusable, provider-neutral React chat UI for standard AI SDK UI messages, plus a thin working example. Its compound components let applications compose a controlled chat from a few substantial pieces. `ChatSurface` and the `useChat`-powered `ChatWidget` remain ready-made presets built from those same pieces.
 
 The example adds a standalone chat, iframe embed and launcher, Node/AI SDK backend, Human-in-the-Loop tool approvals, optional external MCP servers, and isolated inline MCP App rendering. Provider and MCP host code are example-only and are not imported by the library entry point.
 
@@ -8,18 +8,17 @@ MCP is optional. With no provider or MCP configuration, ordinary chat runs in de
 
 ## Install the library
 
-The package exports `ChatSurface`, `ChatWidget`, `DefaultToolRenderer`, their prop/context types, and `@scottopolis/agent-widget/styles.css`. `ai`, `@ai-sdk/react`, React, and React DOM are compatible peer dependencies; provider packages and the experimental MCP renderer are not library runtime dependencies.
+The package exports `Chat`, `ChatSurface`, `ChatWidget`, `DefaultToolRenderer`, their prop/context types, and `@scottopolis/agent-widget/styles.css`. `ai`, `@ai-sdk/react`, React, and React DOM are compatible peer dependencies; provider packages and the experimental MCP renderer are not library runtime dependencies.
 
-Use the controlled surface when the host already owns transport, persistence, recovery, or optimistic state:
+Compose `Chat.Root`, `Chat.Transcript`, `Chat.Empty`, `Chat.Messages`, `Chat.Composer`, `Chat.Input`, and `Chat.Send` when the host owns transport, persistence, recovery, or optimistic state:
 
 ```tsx
-import { ChatSurface } from '@scottopolis/agent-widget';
+import { Chat } from '@scottopolis/agent-widget';
 import '@scottopolis/agent-widget/styles.css';
 
-<ChatSurface
+<Chat.Root
   messages={chat.messages}
   status={chat.status}
-  error={safeError}
   actions={{
     sendMessage: chat.sendMessage,
     stop: chat.stop,
@@ -27,20 +26,82 @@ import '@scottopolis/agent-widget/styles.css';
     addToolApprovalResponse: chat.addToolApprovalResponse,
     setMessages: chat.setMessages,
   }}
-  header={<YourHeader />}
-  statusContent={isRecovering ? <RecoveryIndicator /> : null}
-  beforeComposer={<YourBrowserToolControls />}
-  renderError={(error, retry) => <SafeError error={error} retry={retry} />}
-  renderTool={(part, context) => {
-    if (!mayDisplayTool(part)) return null;
-    return renderKnownTool(part) ?? context.renderDefault();
-  }}
-/>
+  title="Support chat"
+>
+  <YourHeader />
+  <Chat.Transcript>
+    <Chat.Empty>How can we help?</Chat.Empty>
+    <Chat.Messages
+      showProgress={!isRecovering}
+      renderTool={(part, context) => {
+        if (!mayDisplayTool(part)) return null;
+        return renderKnownTool(part) ?? context.renderDefault();
+      }}
+    />
+    {isRecovering && <RecoveryIndicator />}
+    {safeError && <SafeError error={safeError} retry={chat.regenerate} />}
+  </Chat.Transcript>
+  <footer className="composer-wrap">
+    <YourBrowserToolControls />
+    <Chat.Composer>
+      <Chat.Input ref={composerRef} placeholder="Ask a question…" />
+      <YourExtraControl />
+      <Chat.Send />
+    </Chat.Composer>
+    <p>AI can make mistakes. Check important information.</p>
+  </footer>
+</Chat.Root>
 ```
 
-`renderTool` is authoritative when supplied: `null` suppresses a tool without rendering its name, input, result, or the default fallback. `actions` accepts `sendMessage({ text })`, `stop()`, `regenerate()`, `addToolApprovalResponse(response)`, and optional `setMessages(update)` for removing an empty assistant turn after stop. User content is rendered as literal React text; only assistant text is parsed as Markdown with raw HTML disabled.
+`Chat.Root` scopes styles and shares the controlled messages, status, and actions. `Chat.Transcript` owns the accessible live log and follow-scroll behavior. `Chat.Messages` renders standard message parts; its `renderTool` is authoritative, so `null` or `undefined` suppresses a tool and a tool-only row without leaking names, inputs, results, or a fallback. Call `context.renderDefault()` only when raw default tool output is appropriate. `Chat.Composer` owns its draft, duplicate-submit lock, and rejected-send recovery. `Chat.Input` accepts normal textarea props and a ref while preserving Enter, Shift+Enter, and IME behavior. `Chat.Send` switches between submit and stop, including empty-assistant cleanup after stop.
 
-Pass `composerRef` to focus or measure a specific mounted composer. Each textarea also has the stable `data-agent-chat-composer` attribute for delegated host events; prefer the ref when targeting one of multiple widgets.
+The `actions` object accepts `sendMessage({ text })`, `stop()`, `regenerate()`, `addToolApprovalResponse(response)`, and optional `setMessages(update)`. Header, disclaimer, errors, recovery state, and extra controls are ordinary React children, so they can be reordered without adding layout props. User content is rendered as literal React text; only assistant text is parsed as Markdown with raw HTML disabled.
+
+Pass a ref directly to `Chat.Input` to focus or measure a composed input. Each input also has the stable `data-agent-chat-composer` attribute for delegated host events; prefer the ref when targeting one of multiple chats.
+
+### Response actions and suggested prompts
+
+Use the `Chat.Messages` child function to compose optional content for a specific rendered assistant response. Put ordinary feedback or copy controls first, followed by generic suggestion components:
+
+```tsx
+<Chat.Messages renderTool={renderTool}>
+  {(message) => {
+    const suggestions = suggestionsByMessageId[message.id] ?? [];
+    const showActions = mayActOnResponse(message);
+    if (!showActions && suggestions.length === 0) return null;
+    return (
+      <Chat.ResponseFooter>
+        {showActions && (
+          <div className="response-actions" aria-label="Response actions">
+            <button type="button" aria-label="Like" onClick={() => saveFeedback(message.id, 'like')}><ThumbsUp /></button>
+            <button type="button" aria-label="Dislike" onClick={() => saveFeedback(message.id, 'dislike')}><ThumbsDown /></button>
+            <button type="button" aria-label="Copy" onClick={() => copyResponse(message)}><Copy /></button>
+          </div>
+        )}
+        {suggestions.length > 0 && (
+          <Chat.Suggestions>
+            {suggestions.map((suggestion) => (
+              <Chat.Suggestion key={suggestion.prompt} prompt={suggestion.prompt}>
+                {suggestion.label}
+              </Chat.Suggestion>
+            ))}
+          </Chat.Suggestions>
+        )}
+      </Chat.ResponseFooter>
+    );
+  }}
+</Chat.Messages>
+```
+
+`Chat.Suggestion` submits its `prompt` through the same guarded action path as the composer; its child is only the display label. Suggestions are disabled while a send is pending or the chat is submitted/streaming, and rejected sends are contained so the control can be retried. The child function runs only for assistant messages with rendered content, so an authoritative `renderTool` suppression cannot be bypassed by a footer.
+
+The host owns deriving `suggestionsByMessageId` from whatever LLM output contract it chooses and owns feedback persistence. Actions and suggestions are independent: either can render without the other. The library requires no tool, schema, message metadata, provider, or generation convention. Return `null` when a response has neither actions nor suggestions; the default presets render no response footer.
+
+For the original controlled preset, use `ChatSurface`. It assembles the same compound components and keeps its existing presentation props, including `header`, `statusContent`, `beforeComposer`, `composerRef`, `disclaimer`, `renderError`, and `renderTool`:
+
+```tsx
+<ChatSurface messages={chat.messages} status={chat.status} actions={chat} />
+```
 
 For a conventional AI SDK HTTP transport, `ChatWidget` owns `useChat` and accepts all presentation props above:
 
@@ -86,7 +147,7 @@ All library selectors are under `.agent-chat`; the stylesheet has no `:root`, `h
 }
 ```
 
-Pass `className="my-assistant"`, or replace the default header with `header`. `header={null}`, `welcome={null}`, and `disclaimer={null}` suppress those defaults. `renderTool` is the tool/MCP boundary: call `context.renderDefault()` only when a raw default tool card is appropriate. Keep MCP credentials, authorization, sandbox policy, and consequential tool execution outside this library.
+Pass `className="my-assistant"` to `Chat.Root`, `ChatSurface`, or `ChatWidget`. On the presets, replace the default header with `header`; `header={null}`, `welcome={null}`, and `disclaimer={null}` suppress those defaults. `renderTool` is the tool/MCP boundary. Keep MCP credentials, authorization, sandbox policy, and consequential tool execution outside this library.
 
 Runtime branding can use the standard root `style` prop, which also types the variables above: `<ChatSurface style={{ '--agent-chat-accent': brandColor }} ... />`. Standalone mode defaults to a full-page presentation. `embedded` mode fills its containing block instead; give the parent an explicit height (for example `height: 620px`) or set `--agent-chat-height` on the surface.
 
@@ -174,7 +235,8 @@ This repository is an MCP client/App host; it does not include an MCP server. It
 
 | Concern | Source |
 | --- | --- |
-| Controlled layout, copy, normal tool cards | `src/lib/ChatSurface.tsx` |
+| Controlled compound components and normal tool cards | `src/lib/Chat.tsx` |
+| Compatible controlled presentation preset | `src/lib/ChatSurface.tsx` |
 | `useChat` convenience wrapper | `src/lib/ChatWidget.tsx` |
 | Inline app policy and AI SDK renderer | `src/chat/McpApp.tsx` |
 | Scoped library colors and responsive layout | `src/lib/styles.css` |

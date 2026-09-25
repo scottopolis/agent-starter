@@ -361,18 +361,16 @@ export type ChatSuggestionProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 
 
 function Suggestion({ prompt, children, className, disabled, onClick, ...props }: ChatSuggestionProps) {
   const { busy, pendingSend, sendPrompt } = useChatContext('Chat.Suggestion');
-  const [pending, setPending] = useState(false);
   return (
     <button
       {...props}
       className={['suggestion', className].filter(Boolean).join(' ')}
       type="button"
-      disabled={disabled || busy || pendingSend || pending}
+      disabled={disabled || busy || pendingSend}
       onClick={(event) => {
         onClick?.(event);
         if (event.defaultPrevented) return;
-        setPending(true);
-        void sendPrompt(prompt).finally(() => setPending(false));
+        void sendPrompt(prompt);
       }}
     >
       {children ?? prompt}

@@ -68,9 +68,9 @@ Use the `Chat.Messages` child function to compose optional content for a specifi
   {(message) => suggestionsByMessageId[message.id]?.length ? (
     <Chat.ResponseFooter>
       <div className="response-actions" aria-label="Response actions">
-        <button type="button" onClick={() => saveFeedback(message.id, 'like')}>Like</button>
-        <button type="button" onClick={() => saveFeedback(message.id, 'dislike')}>Dislike</button>
-        <button type="button" onClick={() => copyResponse(message)}>Copy</button>
+        <button type="button" aria-label="Like" onClick={() => saveFeedback(message.id, 'like')}><ThumbsUp /></button>
+        <button type="button" aria-label="Dislike" onClick={() => saveFeedback(message.id, 'dislike')}><ThumbsDown /></button>
+        <button type="button" aria-label="Copy" onClick={() => copyResponse(message)}><Copy /></button>
       </div>
       <Chat.Suggestions>
         {suggestionsByMessageId[message.id].map((suggestion) => (

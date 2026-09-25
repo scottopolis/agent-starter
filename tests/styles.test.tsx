@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 
+import { Chat } from '../src/lib/Chat';
 import { ChatSurface } from '../src/lib/ChatSurface';
 import './reset.css';
 import '../src/lib/styles.css';
@@ -76,6 +77,34 @@ describe('library styles', () => {
     expect(getComputedStyle(disclaimer).color).toBe('var(--agent-chat-muted)');
     const muted = getComputedStyle(root).getPropertyValue('--agent-chat-muted').trim();
     expect(contrastRatio(muted, '#ffffff')).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('keeps response action icons small, borderless, and transparent', () => {
+    render(
+      <Chat.Root
+        messages={[{ id: 'assistant-1', role: 'assistant', parts: [{ type: 'text', text: 'Answer' }] }]}
+        status="ready"
+        actions={{ sendMessage() {}, stop() {}, regenerate() {}, addToolApprovalResponse() {} }}
+      >
+        <Chat.Transcript>
+          <Chat.Messages>
+            {() => (
+              <Chat.ResponseFooter>
+                <div className="response-actions">
+                  <button type="button" aria-label="Like"><svg /></button>
+                </div>
+              </Chat.ResponseFooter>
+            )}
+          </Chat.Messages>
+        </Chat.Transcript>
+      </Chat.Root>,
+    );
+    const action = screen.getByRole('button', { name: 'Like' });
+    expect(getComputedStyle(action).width).toBe('24px');
+    expect(getComputedStyle(action).height).toBe('24px');
+    expect(getComputedStyle(action).borderTopWidth).toBe('0px');
+    expect(getComputedStyle(action).backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(getComputedStyle(action.querySelector('svg')!).width).toBe('14px');
   });
 });
 

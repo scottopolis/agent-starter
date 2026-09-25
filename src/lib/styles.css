@@ -83,9 +83,10 @@
 .agent-chat .message-bubble--user { border-radius: 18px 18px 6px 18px; color: #fff; background: var(--agent-chat-accent); }
 .agent-chat .message-row--with-footer { margin-bottom: 9px; }
 .agent-chat .response-footer { display: grid; gap: 8px; margin: 0 0 24px 40px; }
-.agent-chat .response-actions { display: flex; flex-wrap: wrap; align-items: center; width: fit-content; gap: 2px; padding: 3px; border-radius: 11px; background: #f0f3f1; }
-.agent-chat .response-actions button { padding: 5px 8px; border: 0; border-radius: 8px; color: var(--agent-chat-muted); background: transparent; font-size: 11px; }
-.agent-chat .response-actions button:hover { color: var(--agent-chat-ink); background: #fff; }
+.agent-chat .response-actions { display: flex; flex-wrap: wrap; align-items: center; width: fit-content; gap: 4px; }
+.agent-chat .response-actions button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; color: var(--agent-chat-muted); background: transparent; }
+.agent-chat .response-actions button:hover { color: var(--agent-chat-ink); }
+.agent-chat .response-actions button svg { width: 14px; height: 14px; }
 .agent-chat .suggestions { display: flex; flex-wrap: wrap; gap: 7px; }
 .agent-chat .suggestion { max-width: 100%; padding: 8px 12px; border: 1px solid #d5e7e0; border-radius: 999px; color: var(--agent-chat-accent); background: var(--agent-chat-avatar-bg); font-size: 12px; line-height: 1.25; text-align: left; }
 .agent-chat .suggestion:hover { border-color: #b9d8cd; background: #d2eae1; }

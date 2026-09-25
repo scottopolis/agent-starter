@@ -78,6 +78,40 @@ describe('Chat compound components', () => {
     expect(scrollTo).not.toHaveBeenCalled();
   });
 
+  it('follows appended transcript children only while the reader remains near the end', () => {
+    const actions = surfaceActions();
+    const messages = [assistantMessage('answer-1', 'Existing answer')];
+    const { rerender } = render(
+      <FollowContentChat messages={messages} actions={actions} showFooter={false} showStatus={false} />,
+    );
+    const viewport = screen.getByRole('log', { name: 'Conversation messages' });
+    const scrollTo = vi.spyOn(viewport, 'scrollTo');
+
+    rerender(<FollowContentChat messages={messages} actions={actions} showFooter showStatus={false} />);
+    expect(screen.getByText('Suggested follow-up')).toBeInTheDocument();
+    expect(scrollTo).toHaveBeenCalledOnce();
+
+    Object.defineProperties(viewport, {
+      scrollHeight: { configurable: true, value: 500 },
+      clientHeight: { configurable: true, value: 100 },
+      scrollTop: { configurable: true, value: 0 },
+    });
+    fireEvent.scroll(viewport);
+    rerender(<FollowContentChat messages={messages} actions={actions} showFooter showStatus />);
+    expect(screen.getByRole('status')).toHaveTextContent('Recovery details');
+    expect(scrollTo).toHaveBeenCalledOnce();
+  });
+
+  it('honors a custom accessible transcript label', () => {
+    render(
+      <Chat.Root messages={[]} status="ready" actions={surfaceActions()}>
+        <Chat.Transcript aria-label="Support history"><Chat.Messages /></Chat.Transcript>
+      </Chat.Root>,
+    );
+    expect(screen.getByRole('log', { name: 'Support history' })).toBeInTheDocument();
+    expect(screen.queryByRole('log', { name: 'Conversation messages' })).not.toBeInTheDocument();
+  });
+
   it('keeps custom tool rendering authoritative in a composed transcript', () => {
     const responseFooter = vi.fn(() => <Chat.ResponseFooter>Should stay hidden</Chat.ResponseFooter>);
     render(
@@ -160,6 +194,53 @@ describe('Chat compound components', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Try next step' }));
     expect(sendMessage).toHaveBeenCalledTimes(2);
     expect(sendMessage).toHaveBeenNthCalledWith(2, { text: 'Continue with the next step' });
+  });
+
+  it('reactively locks every prompt control while one send is pending without showing stop', async () => {
+    const pending = deferred<unknown>();
+    const sendMessage = vi.fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(undefined);
+    const messages = [
+      assistantMessage('answer-1', 'First answer'),
+      assistantMessage('answer-2', 'Second answer'),
+    ];
+    render(
+      <Chat.Root messages={messages} status="ready" actions={surfaceActions({ sendMessage })}>
+        <Chat.Transcript>
+          <Chat.Messages>
+            {(message) => (
+              <Chat.ResponseFooter>
+                <Chat.Suggestions>
+                  <Chat.Suggestion prompt={`Ask about ${message.id}`}>{`Suggestion ${message.id}`}</Chat.Suggestion>
+                </Chat.Suggestions>
+              </Chat.ResponseFooter>
+            )}
+          </Chat.Messages>
+        </Chat.Transcript>
+        <Chat.Composer><Chat.Input /><Chat.Send /></Chat.Composer>
+      </Chat.Root>,
+    );
+    const composer = screen.getByLabelText('Message');
+    await userEvent.type(composer, 'Composer attempt');
+    const suggestions = screen.getAllByRole('button', { name: /Suggestion answer-/ });
+
+    await userEvent.click(suggestions[0]);
+    await waitFor(() => suggestions.forEach((suggestion) => expect(suggestion).toBeDisabled()));
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Stop response' })).not.toBeInTheDocument();
+
+    await userEvent.click(suggestions[1]);
+    fireEvent.submit(composer.closest('form')!);
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(composer).toHaveValue('Composer attempt');
+
+    await act(async () => pending.reject(new Error('offline')));
+    await waitFor(() => suggestions.forEach((suggestion) => expect(suggestion).toBeEnabled()));
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
+    await userEvent.click(suggestions[1]);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenNthCalledWith(2, { text: 'Ask about answer-2' });
   });
 });
 
@@ -597,12 +678,31 @@ function SuggestedChat({ status, actions }: {
   );
 }
 
+function FollowContentChat({ messages, actions, showFooter, showStatus }: {
+  messages: UIMessage[];
+  actions: Parameters<typeof Chat.Root>[0]['actions'];
+  showFooter: boolean;
+  showStatus: boolean;
+}) {
+  return (
+    <Chat.Root messages={messages} status="ready" actions={actions}>
+      <Chat.Transcript>
+        <Chat.Messages>
+          {showFooter ? () => <Chat.ResponseFooter>Suggested follow-up</Chat.ResponseFooter> : undefined}
+        </Chat.Messages>
+        {showStatus && <div role="status">Recovery details</div>}
+      </Chat.Transcript>
+    </Chat.Root>
+  );
+}
+
 function assistantMessage(id: string, text: string): UIMessage {
   return { id, role: 'assistant', parts: [{ type: 'text', text }] };
 }
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }

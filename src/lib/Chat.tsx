@@ -11,7 +11,6 @@ import {
   type Ref,
   type TextareaHTMLAttributes,
   type ButtonHTMLAttributes,
-  type SubmitEvent,
   useContext,
   useEffect,
   useId,
@@ -62,6 +61,7 @@ type ChatContextValue = Readonly<{
   status: ChatStatus;
   actions: ChatSurfaceActions;
   busy: boolean;
+  pendingSend: boolean;
   sendPrompt: (prompt: string) => Promise<boolean>;
 }>;
 
@@ -89,6 +89,7 @@ function Root({
   ...rootProps
 }: ChatRootProps) {
   const busy = isBusy(status);
+  const [pendingSend, setPendingSend] = useState(false);
   const sendLockedRef = useRef(false);
   const rootClassName = [
     'agent-chat',
@@ -100,6 +101,7 @@ function Root({
     const text = prompt.trim();
     if (sendLockedRef.current || busy || !text) return false;
     sendLockedRef.current = true;
+    setPendingSend(true);
     try {
       await actions.sendMessage({ text });
       return true;
@@ -107,11 +109,12 @@ function Root({
       return false;
     } finally {
       sendLockedRef.current = false;
+      setPendingSend(false);
     }
   }
 
   return (
-    <ChatContext.Provider value={{ messages, status, actions, busy, sendPrompt }}>
+    <ChatContext.Provider value={{ messages, status, actions, busy, pendingSend, sendPrompt }}>
       <div {...rootProps} className={rootClassName} style={style}>
         <section className="chat-card" aria-label={title}>{children}</section>
       </div>
@@ -125,6 +128,7 @@ const Transcript = forwardRef<HTMLDivElement, ChatTranscriptProps>(function Tran
   className,
   children,
   onScroll,
+  'aria-label': ariaLabel = 'Conversation messages',
   ...props
 }, forwardedRef) {
   const { messages, status, busy } = useChatContext('Chat.Transcript');
@@ -135,7 +139,7 @@ const Transcript = forwardRef<HTMLDivElement, ChatTranscriptProps>(function Tran
     if (followMessagesRef.current) {
       viewportRef.current?.scrollTo({ top: viewportRef.current.scrollHeight });
     }
-  }, [messages, status]);
+  }, [children, messages, status]);
 
   return (
     <div
@@ -151,7 +155,7 @@ const Transcript = forwardRef<HTMLDivElement, ChatTranscriptProps>(function Tran
         onScroll?.(event);
       }}
       role="log"
-      aria-label="Conversation messages"
+      aria-label={ariaLabel}
       aria-live="polite"
       aria-relevant="additions"
       aria-busy={busy}
@@ -215,16 +219,16 @@ export type ChatComposerProps = Omit<FormHTMLAttributes<HTMLFormElement>, 'onSub
 }>;
 
 function Composer({ className, children, onSubmit, ...props }: ChatComposerProps) {
-  const { actions, busy, sendPrompt } = useChatContext('Chat.Composer');
+  const { actions, busy, pendingSend, sendPrompt } = useChatContext('Chat.Composer');
   const [draft, setDraft] = useState('');
   const submitLockedRef = useRef(false);
   const inputId = useId();
 
-  function submit(event: SubmitEvent<HTMLFormElement>) {
+  function submit(event: Parameters<NonNullable<FormHTMLAttributes<HTMLFormElement>['onSubmit']>>[0]) {
     onSubmit?.(event);
     if (event.defaultPrevented) return;
     event.preventDefault();
-    if (submitLockedRef.current || busy || !draft.trim()) return;
+    if (submitLockedRef.current || busy || pendingSend || !draft.trim()) return;
     const submittedDraft = draft.trim();
     submitLockedRef.current = true;
     setDraft('');
@@ -302,7 +306,7 @@ const Input = forwardRef<HTMLTextAreaElement, ChatInputProps>(function Input({
 export type ChatSendProps = ButtonHTMLAttributes<HTMLButtonElement>;
 
 function Send({ children, className, disabled, onClick, ...props }: ChatSendProps) {
-  const { busy } = useChatContext('Chat.Send');
+  const { busy, pendingSend } = useChatContext('Chat.Send');
   const { draft, stopResponse } = useComposerContext('Chat.Send');
   return busy ? (
     <button
@@ -321,7 +325,7 @@ function Send({ children, className, disabled, onClick, ...props }: ChatSendProp
       {...props}
       className={['send-button', className].filter(Boolean).join(' ')}
       type="submit"
-      disabled={disabled || !draft.trim()}
+      disabled={disabled || pendingSend || !draft.trim()}
       onClick={onClick}
       aria-label={props['aria-label'] ?? 'Send message'}
     >{children ?? <ArrowUp />}</button>
@@ -356,14 +360,14 @@ export type ChatSuggestionProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 
 }>;
 
 function Suggestion({ prompt, children, className, disabled, onClick, ...props }: ChatSuggestionProps) {
-  const { busy, sendPrompt } = useChatContext('Chat.Suggestion');
+  const { busy, pendingSend, sendPrompt } = useChatContext('Chat.Suggestion');
   const [pending, setPending] = useState(false);
   return (
     <button
       {...props}
       className={['suggestion', className].filter(Boolean).join(' ')}
       type="button"
-      disabled={disabled || busy || pending}
+      disabled={disabled || busy || pendingSend || pending}
       onClick={(event) => {
         onClick?.(event);
         if (event.defaultPrevented) return;

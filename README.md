@@ -65,28 +65,37 @@ Use the `Chat.Messages` child function to compose optional content for a specifi
 
 ```tsx
 <Chat.Messages renderTool={renderTool}>
-  {(message) => suggestionsByMessageId[message.id]?.length ? (
-    <Chat.ResponseFooter>
-      <div className="response-actions" aria-label="Response actions">
-        <button type="button" aria-label="Like" onClick={() => saveFeedback(message.id, 'like')}><ThumbsUp /></button>
-        <button type="button" aria-label="Dislike" onClick={() => saveFeedback(message.id, 'dislike')}><ThumbsDown /></button>
-        <button type="button" aria-label="Copy" onClick={() => copyResponse(message)}><Copy /></button>
-      </div>
-      <Chat.Suggestions>
-        {suggestionsByMessageId[message.id].map((suggestion) => (
-          <Chat.Suggestion key={suggestion.prompt} prompt={suggestion.prompt}>
-            {suggestion.label}
-          </Chat.Suggestion>
-        ))}
-      </Chat.Suggestions>
-    </Chat.ResponseFooter>
-  ) : null}
+  {(message) => {
+    const suggestions = suggestionsByMessageId[message.id] ?? [];
+    const showActions = mayActOnResponse(message);
+    if (!showActions && suggestions.length === 0) return null;
+    return (
+      <Chat.ResponseFooter>
+        {showActions && (
+          <div className="response-actions" aria-label="Response actions">
+            <button type="button" aria-label="Like" onClick={() => saveFeedback(message.id, 'like')}><ThumbsUp /></button>
+            <button type="button" aria-label="Dislike" onClick={() => saveFeedback(message.id, 'dislike')}><ThumbsDown /></button>
+            <button type="button" aria-label="Copy" onClick={() => copyResponse(message)}><Copy /></button>
+          </div>
+        )}
+        {suggestions.length > 0 && (
+          <Chat.Suggestions>
+            {suggestions.map((suggestion) => (
+              <Chat.Suggestion key={suggestion.prompt} prompt={suggestion.prompt}>
+                {suggestion.label}
+              </Chat.Suggestion>
+            ))}
+          </Chat.Suggestions>
+        )}
+      </Chat.ResponseFooter>
+    );
+  }}
 </Chat.Messages>
 ```
 
 `Chat.Suggestion` submits its `prompt` through the same guarded action path as the composer; its child is only the display label. Suggestions are disabled while a send is pending or the chat is submitted/streaming, and rejected sends are contained so the control can be retried. The child function runs only for assistant messages with rendered content, so an authoritative `renderTool` suppression cannot be bypassed by a footer.
 
-The host owns deriving `suggestionsByMessageId` from whatever LLM output contract it chooses and owns feedback persistence. The library requires no tool, schema, message metadata, provider, or generation convention. Return `null` when a response has no actions or suggestions; the default presets render no response footer.
+The host owns deriving `suggestionsByMessageId` from whatever LLM output contract it chooses and owns feedback persistence. Actions and suggestions are independent: either can render without the other. The library requires no tool, schema, message metadata, provider, or generation convention. Return `null` when a response has neither actions nor suggestions; the default presets render no response footer.
 
 For the original controlled preset, use `ChatSurface`. It assembles the same compound components and keeps its existing presentation props, including `header`, `statusContent`, `beforeComposer`, `composerRef`, `disclaimer`, `renderError`, and `renderTool`:
 
